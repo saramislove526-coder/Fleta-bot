@@ -185,6 +185,8 @@ def _request_generation(
 
     # 0. API 키가 설정된 프로바이더만 후보로 삼는다 (키 없이 시도하면 불필요한 지연만 발생)
     configured = [p for p in _PROVIDER_POOL if os.getenv(_PROVIDER_ENV.get(p, ""))]
+    log.debug("설정된 프로바이더: %s | AI_PROVIDER=%s | 쿨다운: %s", configured, AI_PROVIDER, 
+              {k: round(v - now, 0) for k, v in _provider_cooldowns.items() if v > now})
     if not configured:
         raise AIServiceError(
             "사용 가능한 AI 프로바이더가 없습니다. .env에 UPSTAGE_API_KEY/OPENAI_API_KEY/NVIDIA_API_KEY/GROQ_API_KEY 중 하나를 설정해 주세요."
@@ -205,6 +207,7 @@ def _request_generation(
         start_idx = _provider_rr_index % len(available)
         ordered_providers = available[start_idx:] + available[:start_idx]
     _provider_rr_index += 1
+    log.info("프로바이더 시도 순서: %s", ordered_providers)
 
     errors: list[str] = []
     for provider in ordered_providers:
