@@ -80,10 +80,36 @@ def classify_document(image_path: str) -> Dict[str, Any]:
             "json_schema": _DOCUMENT_CLASSIFY_SCHEMA,
         },
     )
-    # The library returns an object; we extract the string content then parse.
+    # Upstage returns the category as a plain string in content (e.g. "invoice")
+    # and optionally includes confidence_score inside tool_calls.
     try:
-        json_str = response.choices[0].message.content
-        return json.loads(json_str)
+        choice = response.choices[0]
+        category = choice.message.content or ""
+        category = category.strip().strip('"').strip()
+
+        # Try to extract confidence_score from tool_calls if available
+        confidence = None
+        if choice.message.tool_calls:
+            for tc in choice.message.tool_calls:
+                if hasattr(tc, "function") and tc.function:
+                    args = tc.function.arguments
+                    if isinstance(args, dict):
+                        doc_type = args.get("document_type", {})
+                        if isinstance(doc_type, dict):
+                            confidence = doc_type.get("confidence_score")
+                    elif isinstance(args, str):
+                        try:
+                            parsed = json.loads(args)
+                            doc_type = parsed.get("document_type", {})
+                            if isinstance(doc_type, dict):
+                                confidence = doc_type.get("confidence_score")
+                        except (json.JSONDecodeError, AttributeError):
+                            pass
+
+        result = {"category": category}
+        if confidence is not None:
+            result["confidence"] = confidence
+        return result
     except Exception as e:
         raise RuntimeError(f"Failed to parse Upstage classification response: {e}")
 
