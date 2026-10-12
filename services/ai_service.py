@@ -169,7 +169,7 @@ def _single_api_call(
     except (ValueError, KeyError, IndexError, TypeError) as error:
         raise AIServiceError(f"{provider} 응답 파싱 실패") from error
 
-    if not text.strip():
+    if not text or not text.strip():
         raise AIServiceError(f"{provider} 빈 응답")
     return text
 
