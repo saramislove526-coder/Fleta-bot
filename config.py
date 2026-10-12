@@ -4,9 +4,13 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = BASE_DIR / "database" / "bot.db"
 COMMAND_PREFIX = os.getenv("COMMAND_PREFIX", "!")
-AI_PROVIDER = os.getenv("AI_PROVIDER", "nvidia").lower()
+AI_PROVIDER = os.getenv("AI_PROVIDER", "upstage").lower()
 
-# 1위 추천 모델: NVIDIA Llama 3.1 405B & Groq Meta Llama 3.3 70B (딥시크 완전 제외)
+# 한국어 1티어 추천 모델: Upstage Solar Pro (Solar LLM)
+UPSTAGE_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro")
+UPSTAGE_API_URL = "https://api.upstage.ai/v1/chat/completions"
+
+# NVIDIA Llama 모델
 NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-405b-instruct")
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 

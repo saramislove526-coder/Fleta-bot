@@ -16,6 +16,8 @@ from config import (
     NVIDIA_MODEL,
     OPENAI_API_URL,
     OPENAI_MODEL,
+    UPSTAGE_API_URL,
+    UPSTAGE_MODEL,
     SUMMARY_KEEP_RECENT,
     SUMMARY_TRIGGER_COUNT,
     MAX_RESPONSE_TOKENS,
@@ -27,6 +29,7 @@ from services.memory import remember_message, save_memory
 from services.prompt_builder import build_prompt
 from services.summarizer import extract_memory
 from services.web_search import needs_search, search_web
+from utils.helpers import sanitize_mentions
 
 
 import logging
@@ -35,9 +38,10 @@ import time
 log = logging.getLogger(__name__)
 
 # 전역 프로바이더 교대(Round-Robin) 및 쿨다운 관리
-_PROVIDER_POOL = ["openai", "nvidia", "groq", "huggingface"]
+_PROVIDER_POOL = ["upstage", "openai", "nvidia", "groq", "huggingface"]
 # 프로바이더별 필수 API 키 환경변수 (키가 없으면 아예 시도하지 않음)
 _PROVIDER_ENV = {
+    "upstage": "UPSTAGE_API_KEY",
     "openai": "OPENAI_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
     "groq": "GROQ_API_KEY",
@@ -91,7 +95,12 @@ def _single_api_call(
     max_tokens: int = 500,
     temperature: float = 0.85,
 ) -> str:
-    if provider == "openai":
+    if provider == "upstage":
+        token = os.getenv("UPSTAGE_API_KEY")
+        api_url = UPSTAGE_API_URL
+        model = UPSTAGE_MODEL
+        token_name = "UPSTAGE_API_KEY"
+    elif provider == "openai":
         token = os.getenv("OPENAI_API_KEY")
         api_url = OPENAI_API_URL
         model = OPENAI_MODEL
@@ -178,7 +187,7 @@ def _request_generation(
     configured = [p for p in _PROVIDER_POOL if os.getenv(_PROVIDER_ENV.get(p, ""))]
     if not configured:
         raise AIServiceError(
-            "사용 가능한 AI 프로바이더가 없습니다. .env에 OPENAI_API_KEY/NVIDIA_API_KEY/GROQ_API_KEY/HF_TOKEN 중 하나를 설정해 주세요."
+            "사용 가능한 AI 프로바이더가 없습니다. .env에 UPSTAGE_API_KEY/OPENAI_API_KEY/NVIDIA_API_KEY/GROQ_API_KEY 중 하나를 설정해 주세요."
         )
 
     # 1. 쿨다운이 만료된 사용 가능 프로바이더 필터링
@@ -187,9 +196,14 @@ def _request_generation(
         log.warning("모든 AI 프로바이더가 쿨다운 중입니다. 가장 먼저 해제될 프로바이더를 사용합니다.")
         available = sorted(configured, key=lambda p: _provider_cooldowns.get(p, 0))
 
-    # 2. 번갈아 가며 사용하도록 라운드로빈 순서 정렬
-    start_idx = _provider_rr_index % len(available)
-    ordered_providers = available[start_idx:] + available[:start_idx]
+    # 2. 지정된 AI_PROVIDER가 가용 상태라면 최우선 사용, 그 외는 라운드로빈 정렬
+    if AI_PROVIDER in available:
+        others = [p for p in available if p != AI_PROVIDER]
+        start_idx = _provider_rr_index % len(others) if others else 0
+        ordered_providers = [AI_PROVIDER] + others[start_idx:] + others[:start_idx]
+    else:
+        start_idx = _provider_rr_index % len(available)
+        ordered_providers = available[start_idx:] + available[:start_idx]
     _provider_rr_index += 1
 
     errors: list[str] = []
@@ -200,6 +214,7 @@ def _request_generation(
             raw_text = _single_api_call(provider, copy.deepcopy(messages), image_urls, max_tokens, temperature)
             cleaned = re.sub(r"<think>.*?</think>\s*", "", raw_text, flags=re.DOTALL).strip()
             cleaned = clean_chinese_text(cleaned)
+            cleaned = sanitize_mentions(cleaned)
             if cleaned:
                 log.info("AI 응답 성공 (프로바이더: %s)", provider)
                 return cleaned
@@ -371,6 +386,7 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     if sources:
         links = "\n".join(f"- [{title}]({url})" for title, url in sources)
         full_response = f"{full_response}\n\n🔎 참고한 검색 결과:\n{links}"
+    full_response = sanitize_mentions(full_response)
     db.add_conversation(user_id, character["id"], "user", original_message)
     # 레벨 알림/검색 링크가 히스토리에 저장되면 AI가 자기 말로 착각하므로 순수 응답만 저장
     db.add_conversation(user_id, character["id"], "assistant", response)

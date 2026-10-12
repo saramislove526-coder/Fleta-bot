@@ -27,6 +27,7 @@ from services.intents import (
 )
 from cogs.alarms import describe_alarm
 from ui.status_card import build_affection_card
+from utils.helpers import sanitize_mentions
 
 log = logging.getLogger(__name__)
 CUSTOM_EMOJI = re.compile(r"<a?:([^:>]+):\d+>")
@@ -104,7 +105,10 @@ class Events(commands.Cog):
                 continue
 
             try:
-                await channel.send(starter)
+                await channel.send(
+                    sanitize_mentions(starter),
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
+                )
             except discord.DiscordException:
                 log.exception("Failed to send idle topic starter to channel %s", channel_id)
                 continue
@@ -258,7 +262,12 @@ class Events(commands.Cog):
                 else:
                     response, affection_result = await gen_coro
                 self.active_conversations[key] = now + CONVERSATION_TIMEOUT_SECONDS
-                await message.reply(response[:1980], mention_author=False)
+                safe_response = sanitize_mentions(response[:1980])
+                await message.reply(
+                    safe_response,
+                    mention_author=False,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, replied_user=False),
+                )
                 # 호감도 변화(상승/하락/레벨 변화)가 있으면 Components V2 상황 카드를 함께 전송
                 if affection_result and (affection_result.get("delta") or affection_result.get("level_changed")):
                     try:
@@ -272,7 +281,7 @@ class Events(commands.Cog):
                         cancel_msg = f"🔕 예약된 알람 **{count}개**를 취소했어요!"
                     else:
                         cancel_msg = "😴 이 채널에 예약된 알람이 없어요."
-                    await message.reply(cancel_msg, mention_author=False)
+                    await message.reply(cancel_msg, mention_author=False, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False))
                 elif alarm_intent and alarm_intent.get("type") == "list":
                     rows = db.get_user_alarms(message.author.id, message.channel.id)
                     if rows:
@@ -280,10 +289,11 @@ class Events(commands.Cog):
                         list_msg = f"⏰ 예약된 알람 **{len(rows)}개**야:\n{lines}"
                     else:
                         list_msg = "😴 이 채널에 예약된 알람이 없어요. \"10분 뒤에 알려줘\"처럼 말하면 설정해 드릴게요!"
-                    await message.reply(list_msg[:1980], mention_author=False)
+                    await message.reply(sanitize_mentions(list_msg[:1980]), mention_author=False, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False))
                 elif alarm_intent:
                     delay = alarm_intent["delay_minutes"]
-                    note = alarm_intent.get("note") or "알람"
+                    raw_note = alarm_intent.get("note") or "알람"
+                    note = sanitize_mentions(raw_note)
                     repeat = alarm_intent.get("repeat", "none")
                     repeat_seconds = {"daily": 86400, "weekly": 604800}.get(repeat, 0)
                     db.add_alarm(message.author.id, message.channel.id, time.time() + delay * 60, note, repeat_seconds)
@@ -291,6 +301,7 @@ class Events(commands.Cog):
                     await message.reply(
                         f"⏰ 알람 설정 완료! **{format_delay(delay)}** 뒤에 \"{note}\"(으)로 알려드릴게요.{repeat_tag}",
                         mention_author=False,
+                        allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
                     )
                 await self._send_chat_log(message, user_question, response)
             except AIServiceError as error:

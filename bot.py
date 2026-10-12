@@ -40,7 +40,13 @@ intents.guilds = True
 bot = commands.Bot(
     command_prefix=COMMAND_PREFIX,
     intents=intents,
-    help_command=None
+    help_command=None,
+    allowed_mentions=discord.AllowedMentions(
+        everyone=False,
+        roles=False,
+        users=True,
+        replied_user=False
+    )
 )
 
 commands_synced = False

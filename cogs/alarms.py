@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands, tasks
 
 from database.database import db
+from utils.helpers import sanitize_mentions
 
 log = logging.getLogger(__name__)
 
@@ -79,12 +80,12 @@ class Alarms(commands.Cog):
             if not isinstance(channel, discord.abc.Messageable):
                 log.warning("Alarm channel %s not found, alarm dropped", alarm["channel_id"])
                 continue
-            note = alarm["note"] or "알람"
+            note = sanitize_mentions(alarm["note"] or "알람")
             repeat_tag = f" ({repeat_label(repeat)} 반복)" if repeat in (86400, 604800) else ""
             try:
                 await channel.send(
                     f"⏰ <@{alarm['user_id']}> 알람 시간이에요! **{note}**{repeat_tag}",
-                    allowed_mentions=discord.AllowedMentions(users=True),
+                    allowed_mentions=discord.AllowedMentions(users=True, everyone=False, roles=False),
                 )
             except discord.DiscordException:
                 log.exception("Failed to send alarm to channel %s", alarm["channel_id"])
