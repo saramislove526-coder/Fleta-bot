@@ -7,7 +7,7 @@ COMMAND_PREFIX = os.getenv("COMMAND_PREFIX", "!")
 AI_PROVIDER = os.getenv("AI_PROVIDER", "upstage").lower()
 
 # 한국어 1티어 추천 모델: Upstage Solar Pro (Solar LLM)
-UPSTAGE_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro")
+UPSTAGE_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro4")
 UPSTAGE_API_URL = "https://api.upstage.ai/v1/chat/completions"
 
 # NVIDIA Llama 모델
