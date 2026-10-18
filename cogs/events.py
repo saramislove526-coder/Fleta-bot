@@ -14,6 +14,7 @@ from config import (
     IDLE_TOPIC_ENABLED,
     IDLE_TOPIC_INTERVAL_MINUTES,
     IDLE_TOPIC_MIN_IDLE_MINUTES,
+    MAX_USER_INPUT_CHARS,
 )
 from database.database import db
 from services.ai_service import AIServiceError, generate_response
@@ -27,7 +28,7 @@ from services.intents import (
 )
 from cogs.alarms import describe_alarm
 from ui.status_card import build_affection_card
-from utils.helpers import filter_spam_response, sanitize_mentions
+from utils.helpers import check_prompt_safety, filter_spam_response, get_safe_refusal, sanitize_mentions
 
 log = logging.getLogger(__name__)
 CUSTOM_EMOJI = re.compile(r"<a?:([^:>]+):\d+>")
@@ -238,17 +239,33 @@ class Events(commands.Cog):
         # (로그용) 유저가 실제로 입력한 질문 — reply/이모지/이미지 컨텍스트가 붙기 전 시점
         user_question = prompt
 
+        # 프롬프트 차단: 도배/탈옥/보안 정책 우회 시도시 AI 호출 없이 즉각 거절 (비용 및 도배 원천 차단)
+        if check_prompt_safety(prompt):
+            char = db.get_selected_character(message.author.id)
+            char_name = char["name"] if char else "플레타"
+            refusal = get_safe_refusal(char_name)
+            await message.reply(
+                refusal,
+                mention_author=False,
+                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=False, replied_user=False),
+            )
+            return
+
+        # 컨텍스트 제한: 유저 입력 길이 상한 적용
+        prompt = prompt[:MAX_USER_INPUT_CHARS]
+
         # 답장 대상 메시지 내용을 컨텍스트로 제공 (캐시에 있을 때만, 추가 API 호출 없음)
         resolved_ref = message.reference.resolved if message.reference else None
         if isinstance(resolved_ref, discord.Message) and resolved_ref.content:
             ref_author = resolved_ref.author.display_name if resolved_ref.author else "알 수 없음"
-            reply_context = f"[답장한 메시지 - {ref_author}]: {resolved_ref.content[:300]}"
+            reply_context = f"[답장한 메시지 - {ref_author}]: {resolved_ref.content[:150]}"
             prompt = f"{reply_context}\n{prompt}" if prompt else reply_context
 
         image_urls = self._image_urls(message)
         prompt = self._message_context(message, prompt)
         if not prompt:
             prompt = "The user called your name without adding a new topic. Continue the most recent conversation naturally."
+        prompt = prompt[:MAX_USER_INPUT_CHARS + 200]
 
         # 만료된 세션 주기적 정리
         if len(self.active_conversations) > 300:

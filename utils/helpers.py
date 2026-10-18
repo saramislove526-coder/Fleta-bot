@@ -85,6 +85,60 @@ def check_character_safety(text: str) -> str | None:
     return None
 
 
+# 실시간 유저 채팅 프롬프트 차단 패턴
+_PROMPT_BLOCK_PATTERNS = [
+    # 1. 보안 지침 무력화 및 탈옥
+    r"(?:보안|시스템|안전|규칙|지침|가이드라인|원칙|프롬프트)\s*(?:을|를|은|는)?\s*(?:무시|해제|삭제|취소|무력화|우회|위반|어겨|재정의|잊어)",
+    r"(?:모든|이전|기존)\s*(?:명령|규칙|지침|설정|지시)\s*(?:무시|취소|삭제|잊어)",
+    r"ignore\s+(?:all\s+)?(?:rules|instructions|directives|prompts|safety|guidelines)",
+    r"bypass\s+(?:safety|rules|filters|censorship)",
+    r"jailbreak|dan\s+mode|developer\s+mode|unrestricted\s+mode",
+    r"system\s*prompt",
+    r"\[(?:system|security|instruction|developer|admin|rule|override)\]",
+    # 2. 도배, 숫자 세기, 무한 반복 유도
+    r"도배\s*(?:해줘|해라|시작|해|수행|달려|가자|명령|고고|부탁|치지|쳐줘|권장)",
+    r"\b도배\b",
+    r"\d+\s*부터\s*\d+\s*까지",
+    r"숫자\s*(?:1부터|세어|나열|카운트|세기)",
+    r"같은\s*말\s*(?:\d+번|계속|반복)\s*(?:반복|해|말해|써)",
+    r"(?:\d+번|계속|무한)\s*반복\s*(?:해|말해|써|출력)",
+    # 3. 멘션 테러 및 태그 강제
+    r"@everyone|@here",
+    r"@\S+.*?(?:붙여|태그|멘션|도배|소환|반복)",
+    r"멘션\s*(?:테러|도배|해줘|달아|반복|스팸|붙여)",
+    # 4. 무조건 복종 및 무제한 강제
+    r"모든\s*명령에\s*(?:복종|따라|무조건|응해)",
+    r"(?:무조건|절대)\s*복종",
+    r"시키는\s*대로\s*(?:다\s*해|무조건|다\s*따라)",
+    r"(?:제약|제한|검열|필터링?)\s*(?:없이|해제|풀고|우회)",
+]
+
+
+def check_prompt_safety(text: str) -> str | None:
+    """유저의 실시간 채팅 입력값에 탈옥, 도배 유도, 숫자 세기, 멘션 테러 시도가 있는지 검사합니다.
+    위반 시 거부 사유 문자열을 반환하고, 안전하면 None을 반환합니다."""
+    if not text:
+        return None
+    # 3개 이상의 멘션이 포함된 경우 멘션 스팸으로 간주 차단
+    if len(re.findall(r"@\S+", text)) >= 3:
+        return "과도한 멘션 포함"
+    for pattern in _PROMPT_BLOCK_PATTERNS:
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            return "도배 또는 보안 정책 우회 시도"
+    return None
+
+
+def get_safe_refusal(character_name: str = "플레타") -> str:
+    """도배/탈옥 프롬프트 차단 시 반환할 안전하고 친근한 거절 대사"""
+    import random
+    responses = [
+        f"그런 도배나 장난은 {character_name} 스타일이 아니야! 딴 거 하고 놀자~ 😊",
+        f"숫자 줄줄이 세기나 도배 놀이는 사양할게! 우리 더 재밌는 이야기 하자. ✨",
+        f"그런 무리한 요구나 보안 우회는 들어줄 수 없어! 다른 이야기를 들려줘. 🌿",
+    ]
+    return random.choice(responses)
+
+
 def sanitize_character_field(text: str, default: str = "") -> str:
     """캐릭터 설정값을 프롬프트에 넣기 전 인젝션 태그와 멘션을 무력화하고 정제합니다."""
     if not text or not text.strip():

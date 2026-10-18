@@ -28,6 +28,7 @@ from config import (
     SUMMARY_TRIGGER_COUNT,
     MAX_RESPONSE_TOKENS,
     RESPONSE_TEMPERATURE,
+    MAX_USER_INPUT_CHARS,
 )
 from database.database import db
 from services.affection import AffectionService
@@ -35,7 +36,7 @@ from services.memory import remember_message, save_memory
 from services.prompt_builder import build_prompt
 from services.summarizer import extract_memory
 from services.web_search import needs_search, search_web
-from utils.helpers import sanitize_mentions
+from utils.helpers import check_prompt_safety, get_safe_refusal, sanitize_mentions
 
 
 import logging
@@ -376,7 +377,7 @@ def _summarize_conversation(user_id: int, character_id: int) -> None:
     ]
 
     try:
-        summary = _request_generation(messages, max_tokens=800, temperature=0.3)
+        summary = _request_generation(messages, max_tokens=400, temperature=0.3)
     except Exception as err:
         log.warning("대화 요약 생성 실패, 이번 턴은 건너뜀: %s", err)
         return
@@ -388,7 +389,7 @@ def _summarize_conversation(user_id: int, character_id: int) -> None:
 
     # 기존 누적 요약을 다시 붙여넣지 않고, LLM이 만든 통합 요약만 저장한다.
     # 중복 저장은 요약을 계속 불려 토큰 낭비와 요약 품질 저하를 유발한다.
-    db.set_summary(user_id, character_id, summary[:2000])
+    db.set_summary(user_id, character_id, summary[:800])
     db.delete_oldest_conversations(user_id, character_id, SUMMARY_KEEP_RECENT)
     log.info(
         "대화 요약 완료 (user=%s, character=%s): %d통 요약, 잔여 %d통",
@@ -438,7 +439,17 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     character = db.get_selected_character(user_id)
     if not character:
         raise AIServiceError("먼저 `/character create`로 캐릭터를 만들고 `/character select`로 선택해 주세요. 선택 후에는 채팅을 바로 보내면 대화할 수 있습니다.")
-    original_message = message
+
+    char_name = character.get("name", "플레타")
+    # 컨텍스트 제한: 유저 입력 길이 상한 적용
+    original_message = (message or "").strip()[:MAX_USER_INPUT_CHARS]
+
+    # 프롬프트 차단: 도배/탈옥/보안 우회 시도시 LLM 호출 및 히스토리 저장을 원천 차단
+    if check_prompt_safety(original_message):
+        log.warning("차단된 악성/도배 프롬프트 (user=%s): %s", user_id, original_message[:100])
+        refusal = get_safe_refusal(char_name)
+        return refusal, {"level_changed": False, "character_name": char_name, "avatar": character.get("avatar")}
+
     if memory := extract_memory(original_message):
         save_memory(user_id, character["id"], memory)
     remember_message(user_id, character["id"], original_message)
@@ -452,6 +463,8 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
         if search_result:
             search_context, sources = search_result
             message = f"{original_message}\n\n[웹 검색 결과 - 이 정보에 근거해 답하고, 확실하지 않으면 모른다고 말해]\n{search_context}"
+    else:
+        message = original_message
 
     # --- 호감도 평가: AI 감정 분석을 본 응답 생성과 병렬 실행 (응답 지연 없음) ---
     can_evaluate = AffectionService.check_cooldown(user_id, character["id"])
