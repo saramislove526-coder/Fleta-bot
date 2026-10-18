@@ -8,16 +8,20 @@ from config import (
     AUTO_WEB_SEARCH,
     AI_PROVIDER,
     GROQ_API_URL,
-    GROQ_MODEL,
+    GROQ_MODELS,
     HUGGINGFACE_API_URL,
-    HUGGINGFACE_MODEL,
+    HUGGINGFACE_MODELS,
     HUGGINGFACE_VISION_MODEL,
     NVIDIA_API_URL,
-    NVIDIA_MODEL,
+    NVIDIA_MODELS,
     OPENAI_API_URL,
-    OPENAI_MODEL,
+    OPENAI_MODELS,
+    OPENROUTER_API_URL,
+    OPENROUTER_MODELS,
+    OLLAMA_API_URL,
+    OLLAMA_MODELS,
     UPSTAGE_API_URL,
-    UPSTAGE_MODEL,
+    UPSTAGE_MODELS,
     SUMMARY_KEEP_RECENT,
     SUMMARY_TRIGGER_COUNT,
     MAX_RESPONSE_TOKENS,
@@ -38,17 +42,33 @@ import time
 log = logging.getLogger(__name__)
 
 # 전역 프로바이더 교대(Round-Robin) 및 쿨다운 관리
-_PROVIDER_POOL = ["upstage", "openai", "nvidia", "groq", "huggingface"]
+_PROVIDER_POOL = ["upstage", "openai", "nvidia", "groq", "huggingface", "openrouter", "ollama"]
 # 프로바이더별 필수 API 키 환경변수 (키가 없으면 아예 시도하지 않음)
+# ollama는 인증키가 필요 없으므로 OLLAMA_HOST(서버 주소) 설정 유무로 후보 선정을 판단한다.
 _PROVIDER_ENV = {
     "upstage": "UPSTAGE_API_KEY",
     "openai": "OPENAI_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
     "groq": "GROQ_API_KEY",
     "huggingface": "HF_TOKEN",
+    "openrouter": "OPENROUTER_API_KEY",
+    "ollama": "OLLAMA_HOST",
+}
+# 프로바이더별 사용 가능 모델 목록 (.env의 XXX_MODEL에 쉼표로 여러 개 등록 가능 → 모두 라운드로빈 사용)
+_PROVIDER_MODELS: dict[str, list[str]] = {
+    "upstage": UPSTAGE_MODELS,
+    "openai": OPENAI_MODELS,
+    "nvidia": NVIDIA_MODELS,
+    "groq": GROQ_MODELS,
+    "huggingface": HUGGINGFACE_MODELS,
+    "openrouter": OPENROUTER_MODELS,
+    "ollama": OLLAMA_MODELS,
 }
 _provider_rr_index = 0
+# 프로바이더 단위 쿨다운 (한도 초과/인증 오류 등 프로바이더 전체 문제)
 _provider_cooldowns: dict[str, float] = {}
+# "프로바이더|모델" 단위 쿨다운 (특정 모델 삭제·존재 안 함 등 → 해당 모델만 제외하고 나머지는 계속 사용)
+_model_cooldowns: dict[str, float] = {}
 
 # 모델 삭제·크레딧 소진 등 재시도해도 스스로 해결되지 않는 오류의 쿨다운(초)
 _CONFIG_COOLDOWN_SECONDS = 600.0
@@ -65,7 +85,11 @@ class AIRateLimitError(AIServiceError):
 
 class AIConfigError(AIServiceError):
     """API 키 누락, 모델 삭제, 크레딧 소진 등 반복 시도로 해결되지 않는 오류"""
-    pass
+
+    def __init__(self, message: str, provider_wide: bool = False):
+        super().__init__(message)
+        # True면 프로바이더 전체, False면 해당 모델만 쿨다운한다.
+        self.provider_wide = provider_wide
 
 
 def _is_rate_limit_error(status_code: int, response_text: str) -> bool:
@@ -94,37 +118,57 @@ def _single_api_call(
     image_urls: list[str] | None = None,
     max_tokens: int = 500,
     temperature: float = 0.85,
+    model: str | None = None,
 ) -> str:
     if provider == "upstage":
         token = os.getenv("UPSTAGE_API_KEY")
         api_url = UPSTAGE_API_URL
-        model = UPSTAGE_MODEL
+        models = UPSTAGE_MODELS
         token_name = "UPSTAGE_API_KEY"
     elif provider == "openai":
         token = os.getenv("OPENAI_API_KEY")
         api_url = OPENAI_API_URL
-        model = OPENAI_MODEL
+        models = OPENAI_MODELS
         token_name = "OPENAI_API_KEY"
     elif provider == "nvidia":
         token = os.getenv("NVIDIA_API_KEY")
         api_url = NVIDIA_API_URL
-        model = NVIDIA_MODEL
+        models = NVIDIA_MODELS
         token_name = "NVIDIA_API_KEY"
     elif provider == "groq":
         token = os.getenv("GROQ_API_KEY")
         api_url = GROQ_API_URL
-        model = GROQ_MODEL
+        models = GROQ_MODELS
         token_name = "GROQ_API_KEY"
     elif provider == "huggingface":
         token = os.getenv("HF_TOKEN")
         api_url = HUGGINGFACE_API_URL
-        model = HUGGINGFACE_MODEL
+        models = HUGGINGFACE_MODELS
         token_name = "HF_TOKEN"
+    elif provider == "openrouter":
+        token = os.getenv("OPENROUTER_API_KEY")
+        api_url = OPENROUTER_API_URL
+        models = OPENROUTER_MODELS
+        token_name = "OPENROUTER_API_KEY"
+    elif provider == "ollama":
+        # Ollama는 로컬(또는 사내) 서버라 인증이 없어도 되므로 더미 토큰을 넣는다.
+        token = os.getenv("OLLAMA_API_KEY") or "ollama"
+        api_url = OLLAMA_API_URL
+        models = OLLAMA_MODELS
+        token_name = "OLLAMA_API_KEY"
     else:
         raise AIServiceError(f"지원하지 않는 프로바이더입니다: {provider}")
 
     if not token:
-        raise AIConfigError(f"{token_name}이 설정되어 있지 않습니다.")
+        raise AIConfigError(f"{token_name}이 설정되어 있지 않습니다.", provider_wide=True)
+
+    selected_model = model or (models[0] if models else None)
+    if not selected_model:
+        raise AIConfigError(f"{provider}에 사용할 모델이 설정되어 있지 않습니다.")
+
+    # gpt-oss 등 텍스트 전용 모델이 많으므로 이미지가 있으면 지원 프로바이더로 넘긴다
+    if provider == "ollama" and image_urls:
+        raise AIServiceError("ollama는 이미지 입력을 지원하지 않아 다른 프로바이더로 넘깁니다.")
 
     image_urls = image_urls or []
     
@@ -136,7 +180,7 @@ def _single_api_call(
         messages[-1]["content"] = content_list
 
     payload = {
-        "model": HUGGINGFACE_VISION_MODEL if provider == "huggingface" and image_urls else model,
+        "model": HUGGINGFACE_VISION_MODEL if provider == "huggingface" and image_urls else selected_model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature, # 성격 연기에 적합하도록 기본 0.85
@@ -148,7 +192,9 @@ def _single_api_call(
             api_url,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=payload,
-            timeout=30,
+            # 로컬 Ollama는 첫 토큰까지 느리고 생성도 오래 걸릴 수 있어 응답 대기는 여유를 둔다.
+            # 단, 연결 자체는 빨리 포기해(5초) 폴백 지연을 막는다.
+            timeout=(5, 120) if provider == "ollama" else 30,
         )
     except requests.RequestException as err:
         raise AIServiceError(f"{provider} 서버 연결 문제: {err}") from err
@@ -156,11 +202,18 @@ def _single_api_call(
     if not response.ok:
         if _is_rate_limit_error(response.status_code, response.text):
             raise AIRateLimitError(f"{provider} 한도/토큰 초과 ({response.status_code}): {response.text[:100]}")
-        # 모델 존재 안 함/만료/크레딧 소진/키 무효 → 반복 시도해도 스스로 해결되지 않으므로 장기 쿨다운
-        if response.status_code in (401, 402, 403) or any(
-            kw in response.text for kw in ("model_not_found", "does not exist", "has reached its end of life")
+        # 인증/결제 오류는 프로바이더 전체가 쓸 수 없으므로 프로바이더 전체 쿨다운
+        if response.status_code in (401, 402, 403):
+            raise AIConfigError(
+                f"{provider} 인증/크레딧 오류 ({response.status_code}): {response.text[:160]}",
+                provider_wide=True,
+            )
+        # 모델 삭제/존재 안 함/만료 → 해당 모델만 장기 쿨다운하고 같은 프로바이더의 나머지 모델은 계속 사용
+        if any(
+            kw in response.text
+            for kw in ("model_not_found", "does not exist", "has reached its end of life", "model not found")
         ):
-            raise AIConfigError(f"{provider} 모델/크레딧 오류 ({response.status_code}): {response.text[:160]}")
+            raise AIConfigError(f"{provider} 모델 오류 ({response.status_code}): {response.text[:160]}")
         raise AIServiceError(f"{provider} API 오류 ({response.status_code}): {response.text[:160]}")
 
     try:
@@ -185,14 +238,14 @@ def _request_generation(
 
     # 0. API 키가 설정된 프로바이더만 후보로 삼는다 (키 없이 시도하면 불필요한 지연만 발생)
     configured = [p for p in _PROVIDER_POOL if os.getenv(_PROVIDER_ENV.get(p, ""))]
-    log.debug("설정된 프로바이더: %s | AI_PROVIDER=%s | 쿨다운: %s", configured, AI_PROVIDER, 
+    log.debug("설정된 프로바이더: %s | AI_PROVIDER=%s | 쿨다운: %s", configured, AI_PROVIDER,
               {k: round(v - now, 0) for k, v in _provider_cooldowns.items() if v > now})
     if not configured:
         raise AIServiceError(
-            "사용 가능한 AI 프로바이더가 없습니다. .env에 UPSTAGE_API_KEY/OPENAI_API_KEY/NVIDIA_API_KEY/GROQ_API_KEY 중 하나를 설정해 주세요."
+            "사용 가능한 AI 프로바이더가 없습니다. .env에 UPSTAGE_API_KEY/OPENAI_API_KEY/NVIDIA_API_KEY/GROQ_API_KEY/HF_TOKEN/OPENROUTER_API_KEY 중 하나 또는 OLLAMA_HOST(원격 Ollama 서버)를 설정해 주세요."
         )
 
-    # 1. 쿨다운이 만료된 사용 가능 프로바이더 필터링
+    # 1. 프로바이더 단위 쿨다운이 만료된 사용 가능 프로바이더 필터링
     available = [p for p in configured if _provider_cooldowns.get(p, 0) <= now]
     if not available:
         log.warning("모든 AI 프로바이더가 쿨다운 중입니다. 가장 먼저 해제될 프로바이더를 사용합니다.")
@@ -207,36 +260,70 @@ def _request_generation(
         start_idx = _provider_rr_index % len(available)
         ordered_providers = available[start_idx:] + available[:start_idx]
     _provider_rr_index += 1
-    log.info("프로바이더 시도 순서: %s", ordered_providers)
+
+    # 3. 프로바이더 × 모델 단위 타깃으로 전개 (모델별 개별 쿨다운 지원 — 한 모델 문제가 다른 모델을 막지 않음)
+    def _model_key(p: str, m: str) -> str:
+        return f"{p}|{m}"
+
+    targets: list[tuple[str, str]] = [
+        (p, m)
+        for p in ordered_providers
+        for m in _PROVIDER_MODELS.get(p, [])
+        if _model_cooldowns.get(_model_key(p, m), 0) <= now
+    ]
+    if not targets:
+        # 등록된 모든 모델이 개별 쿨다운이면 가장 먼저 해제될 타깃 하나는 시도한다
+        all_targets = [(p, m) for p in ordered_providers for m in _PROVIDER_MODELS.get(p, [])]
+        if not all_targets:
+            raise AIServiceError("설정된 프로바이더에 사용할 모델이 없습니다. .env의 XXX_MODEL 항목을 확인해 주세요.")
+        targets = sorted(all_targets, key=lambda t: _model_cooldowns.get(_model_key(*t), 0))[:1]
+
+    log.info("AI 시도 순서: %s", [f"{p}:{m}" for p, m in targets])
 
     errors: list[str] = []
-    for provider in ordered_providers:
+    cooled_this_round: set[str] = set()
+    for provider, model in targets:
+        # 같은 요청 안에서 직전에 쿨다운된 프로바이더의 남은 모델은 불필요한 시도를 피한다
+        if provider in cooled_this_round:
+            errors.append(f"{provider}:{model} -> 프로바이더 쿨다운으로 건너뜀")
+            continue
         try:
             # list 깊은 복사를 통해 여러 번 재시도 시 원본 메시지가 훼손되지 않도록 방지
             import copy
-            raw_text = _single_api_call(provider, copy.deepcopy(messages), image_urls, max_tokens, temperature)
+            raw_text = _single_api_call(provider, copy.deepcopy(messages), image_urls, max_tokens, temperature, model=model)
             cleaned = re.sub(r"<think>.*?</think>\s*", "", raw_text, flags=re.DOTALL).strip()
             cleaned = clean_chinese_text(cleaned)
             cleaned = sanitize_mentions(cleaned)
             if cleaned:
-                log.info("AI 응답 성공 (프로바이더: %s)", provider)
+                log.info("AI 응답 성공 (프로바이더: %s, 모델: %s)", provider, model)
                 return cleaned
         except AIRateLimitError as rle:
+            # 한도 초과는 키/조직 단위 문제이므로 해당 프로바이더의 남은 모델도 잠시 보류
             log.warning("프로바이더 [%s] 토큰/요청 한도 초과! 60초간 쿨다운 등록: %s", provider, rle)
             _provider_cooldowns[provider] = time.time() + 60.0
-            errors.append(f"{provider}: {rle}")
+            cooled_this_round.add(provider)
+            errors.append(f"{provider}:{model} -> {rle}")
             continue
         except AIConfigError as cfg_err:
-            log.warning(
-                "프로바이더 [%s] 설정/크레딧 오류! %.0f분간 쿨다운 등록: %s",
-                provider, _CONFIG_COOLDOWN_SECONDS / 60, cfg_err,
-            )
-            _provider_cooldowns[provider] = time.time() + _CONFIG_COOLDOWN_SECONDS
-            errors.append(f"{provider}: {cfg_err}")
+            # 인증/크레딧 오류는 프로바이더 전체, 모델 삭제 등은 해당 모델만 쿨다운
+            if cfg_err.provider_wide:
+                log.warning(
+                    "프로바이더 [%s] 인증/설정 오류! %.0f분간 프로바이더 쿨다운 등록: %s",
+                    provider, _CONFIG_COOLDOWN_SECONDS / 60, cfg_err,
+                )
+                _provider_cooldowns[provider] = time.time() + _CONFIG_COOLDOWN_SECONDS
+                cooled_this_round.add(provider)
+            else:
+                log.warning(
+                    "프로바이더 [%s] 모델 [%s] 오류! %.0f분간 해당 모델만 쿨다운 등록: %s",
+                    provider, model, _CONFIG_COOLDOWN_SECONDS / 60, cfg_err,
+                )
+                _model_cooldowns[_model_key(provider, model)] = time.time() + _CONFIG_COOLDOWN_SECONDS
+            errors.append(f"{provider}:{model} -> {cfg_err}")
             continue
         except Exception as err:
-            log.warning("프로바이더 [%s] 오류 발생, 다른 프로바이더로 교체: %s", provider, err)
-            errors.append(f"{provider}: {err}")
+            log.warning("프로바이더 [%s] 모델 [%s] 오류 발생, 다음 타깃으로 넘어감: %s", provider, model, err)
+            errors.append(f"{provider}:{model} -> {err}")
             continue
 
     raise AIServiceError("모든 AI 프로바이더 접속에 실패했습니다: " + " | ".join(errors))

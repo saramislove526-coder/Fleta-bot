@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 
 # Load environment variables before importing config so config.py can read them
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
+load_dotenv(dotenv_path=os.path.join(os.getcwd(), '.env'))
+load_dotenv()
 
 from config import COMMAND_PREFIX, DISCORD_GUILD_ID
 from utils.sync import clear_obsolete_global, sync_guild

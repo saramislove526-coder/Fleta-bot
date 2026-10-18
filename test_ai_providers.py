@@ -9,14 +9,21 @@ sys.path.insert(0, BASE)
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(BASE, ".env"))
+load_dotenv(os.path.join(os.path.dirname(BASE), ".env"))
+load_dotenv(os.path.join(os.getcwd(), ".env"))
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
 
-from config import HUGGINGFACE_MODEL, HUGGINGFACE_VISION_MODEL, NVIDIA_MODEL, GROQ_MODEL, OPENAI_MODEL
+from config import HUGGINGFACE_MODEL, HUGGINGFACE_VISION_MODEL, NVIDIA_MODEL, GROQ_MODEL, OPENAI_MODEL, OLLAMA_MODEL
 from services import ai_service
 
 print(f"models -> HF: {HUGGINGFACE_MODEL} / vision: {HUGGINGFACE_VISION_MODEL}")
 print(f"models -> NV: {NVIDIA_MODEL} / GROQ: {GROQ_MODEL} / OPENAI: {OPENAI_MODEL}")
+print(f"models -> OLLAMA: {OLLAMA_MODEL} (host set: {bool(os.getenv('OLLAMA_HOST'))})")
+print("provider -> models map:")
+for _p, _ms in ai_service._PROVIDER_MODELS.items():
+    print(f"  {_p}: {_ms}")
 print(f"openai key set: {bool(os.getenv('OPENAI_API_KEY'))}")
 
 messages = [
