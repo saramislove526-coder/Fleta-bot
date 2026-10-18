@@ -41,6 +41,8 @@ class Events(commands.Cog):
         self.active_conversations: dict[tuple[int, int], float] = {}
         self.idle_starter_sent: dict[int, float] = {}
         self._starter_busy = False
+        self.processing_users: set[int] = set()
+        self.user_cooldowns: dict[int, float] = {}
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -191,8 +193,19 @@ class Events(commands.Cog):
             return
 
         content = message.content.strip()
-        key = (message.author.id, message.channel.id)
+        if not content and not message.attachments and not message.stickers:
+            return
+
+        # 중복 생성 방지: 이미 해당 유저의 응답을 생성 중이면 중복 요청 무시 (도배 방지)
+        if message.author.id in self.processing_users:
+            return
+
         now = time.monotonic()
+        # 유저별 1.5초 쿨다운: 너무 빠른 연속 호출 차단 (도배 방지)
+        if now - self.user_cooldowns.get(message.author.id, 0) < 1.5:
+            return
+
+        key = (message.author.id, message.channel.id)
         is_mentioned = self.bot.user in message.mentions if self.bot.user else False
 
         # 한글 트리거 비교 시 안전하게 공백 및 소문자 처리
@@ -201,13 +214,14 @@ class Events(commands.Cog):
         is_reply = False
         if message.guild is not None and not (is_mentioned or triggered):
             is_reply = await self._is_reply_to_bot(message)
-        is_active = now < self.active_conversations.get(key, 0)
 
-        # DM은 항상 대답, 서버에서는 멘션/답글/트리거/활성 대화 세션 중 하나일 때만 대답
+        # DM은 1:1 대화이므로 항상 응답.
+        # 서버에서는 멘션(@플레타), 답장(Reply), 트리거("플레타 ...")일 때만 명확히 응답.
+        # (서버 일반 대화에 끼어들어 도배하는 현상 완전 차단)
         if message.guild is None:
             should_respond = True
         else:
-            should_respond = is_mentioned or is_reply or triggered or is_active
+            should_respond = is_mentioned or is_reply or triggered
 
         if not should_respond:
             return
@@ -252,28 +266,31 @@ class Events(commands.Cog):
             alarm_intent = None
             intent_coro = None
 
-        async with message.channel.typing():
-            try:
-                gen_coro = generate_response(message.author.id, message.guild.id if message.guild else None, prompt, image_urls)
-                if intent_coro:
-                    (response, affection_result), detected_intent = await asyncio.gather(gen_coro, intent_coro)
-                    if detected_intent:
-                        alarm_intent = detected_intent
-                else:
-                    response, affection_result = await gen_coro
-                self.active_conversations[key] = now + CONVERSATION_TIMEOUT_SECONDS
-                safe_response = sanitize_mentions(response[:1980])
-                await message.reply(
-                    safe_response,
-                    mention_author=False,
-                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, replied_user=False),
-                )
-                # 호감도 변화(상승/하락/레벨 변화)가 있으면 Components V2 상황 카드를 함께 전송
-                if affection_result and (affection_result.get("delta") or affection_result.get("level_changed")):
-                    try:
-                        await message.reply(view=build_affection_card(affection_result), mention_author=False)
-                    except discord.DiscordException:
-                        log.exception("Failed to send affection status card")
+        self.processing_users.add(message.author.id)
+        self.user_cooldowns[message.author.id] = now
+        try:
+            async with message.channel.typing():
+                try:
+                    gen_coro = generate_response(message.author.id, message.guild.id if message.guild else None, prompt, image_urls)
+                    if intent_coro:
+                        (response, affection_result), detected_intent = await asyncio.gather(gen_coro, intent_coro)
+                        if detected_intent:
+                            alarm_intent = detected_intent
+                    else:
+                        response, affection_result = await gen_coro
+                    self.active_conversations[key] = now + CONVERSATION_TIMEOUT_SECONDS
+                    safe_response = sanitize_mentions(response[:1980])
+                    await message.reply(
+                        safe_response,
+                        mention_author=False,
+                        allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, replied_user=False),
+                    )
+                    # 호감도 "레벨"이 올랐거나 내렸을 때만 축하/알림 카드 전송 (매 대화마다 카드 2개씩 보내는 도배 방지)
+                    if affection_result and affection_result.get("level_changed"):
+                        try:
+                            await message.reply(view=build_affection_card(affection_result), mention_author=False)
+                        except discord.DiscordException:
+                            log.exception("Failed to send affection status card")
                 # 자연어로 요청한 알람 설정/취소/목록
                 if alarm_intent and alarm_intent.get("type") == "cancel":
                     count = db.cancel_user_alarms(message.author.id, message.channel.id)
@@ -311,6 +328,8 @@ class Events(commands.Cog):
                 log.exception("Message conversation error")
                 if is_mentioned or is_reply or triggered or message.guild is None:
                     await message.reply("응답을 생성하는 중 오류가 발생했습니다.", mention_author=False)
+        finally:
+            self.processing_users.discard(message.author.id)
 
     @commands.Cog.listener()
     async def on_app_command_error(self, interaction: discord.Interaction, error):

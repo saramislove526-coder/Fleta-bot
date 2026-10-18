@@ -62,11 +62,11 @@ RESPONSE_TEMPERATURE = float(os.getenv("RESPONSE_TEMPERATURE", "0.80"))
 DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "0"))
 PUBLIC_CHARACTER_CHANNEL_ID = int(os.getenv("PUBLIC_CHARACTER_CHANNEL_ID", "0"))
 CHAT_TRIGGER = os.getenv("CHAT_TRIGGER", "플레타")
-CONVERSATION_TIMEOUT_SECONDS = int(os.getenv("CONVERSATION_TIMEOUT_SECONDS", "1800"))
+CONVERSATION_TIMEOUT_SECONDS = int(os.getenv("CONVERSATION_TIMEOUT_SECONDS", "300"))
 AUTO_WEB_SEARCH = os.getenv("AUTO_WEB_SEARCH", "true").lower() == "true"
 
-# 유휴 상태 자동 대화 주제: 대화가 끊기면 뉴스/이슈로 먼저 말 걸기
-IDLE_TOPIC_ENABLED = os.getenv("IDLE_TOPIC_ENABLED", "true").lower() == "true"
+# 유휴 상태 자동 대화 주제: 기본 비활성화 (도배 방지)
+IDLE_TOPIC_ENABLED = os.getenv("IDLE_TOPIC_ENABLED", "false").lower() == "true"
 IDLE_TOPIC_INTERVAL_MINUTES = int(os.getenv("IDLE_TOPIC_INTERVAL_MINUTES", "10"))
 IDLE_TOPIC_MIN_IDLE_MINUTES = int(os.getenv("IDLE_TOPIC_MIN_IDLE_MINUTES", "30"))
 IDLE_TOPIC_COOLDOWN_MINUTES = int(os.getenv("IDLE_TOPIC_COOLDOWN_MINUTES", "120"))
