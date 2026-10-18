@@ -11,6 +11,7 @@ from database.database import db
 from services.affection import AffectionService
 from ui.character_view import CharacterView
 from utils.embeds import affection_bar
+from utils.helpers import check_character_safety, sanitize_character_field
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +188,18 @@ class Character(commands.Cog):
             await interaction.response.send_message(f"이름은 1~{MAX_CHARACTER_NAME_LENGTH}자로 입력해 주세요.", ephemeral=True); return
         if db.get_character_by_name(interaction.user.id, name):
             await interaction.response.send_message("같은 이름의 캐릭터가 이미 있습니다.", ephemeral=True); return
+
+        # 탈옥 및 도배 유도 문구 검증
+        for field_name, field_val in [("이름", name), ("소개", description), ("성격", personality), ("말투", speech), ("세계관", world)]:
+            if error_msg := check_character_safety(field_val):
+                await interaction.response.send_message(f"🚫 캐릭터 {field_name}에 {error_msg} 건전한 설정을 입력해 주세요.", ephemeral=True)
+                return
+
+        name = sanitize_character_field(name)
+        description = sanitize_character_field(description)
+        personality = sanitize_character_field(personality)
+        speech = sanitize_character_field(speech)
+        world = sanitize_character_field(world)
         avatar_url = avatar.strip()
 
         character_id = db.create_character(
