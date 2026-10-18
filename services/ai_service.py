@@ -439,6 +439,7 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     character = db.get_selected_character(user_id)
     if not character:
         raise AIServiceError("먼저 `/character create`로 캐릭터를 만들고 `/character select`로 선택해 주세요. 선택 후에는 채팅을 바로 보내면 대화할 수 있습니다.")
+    character = dict(character)
 
     char_name = character.get("name", "플레타")
     # 컨텍스트 제한: 유저 입력 길이 상한 적용

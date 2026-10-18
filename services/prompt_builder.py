@@ -8,6 +8,9 @@ from datetime import datetime, timezone, timedelta
 from utils.helpers import sanitize_character_field
 
 def build_prompt(user_id: int, character, message: str) -> list[dict]:
+    if hasattr(character, "keys"):
+        character = dict(character)
+
     # 컨텍스트 제한: 유저 입력 길이 상한
     safe_user_message = (message or "").strip()[:MAX_USER_INPUT_CHARS]
 
