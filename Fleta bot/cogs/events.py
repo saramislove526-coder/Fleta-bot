@@ -270,27 +270,26 @@ class Events(commands.Cog):
         self.user_cooldowns[message.author.id] = now
         try:
             async with message.channel.typing():
-                try:
-                    gen_coro = generate_response(message.author.id, message.guild.id if message.guild else None, prompt, image_urls)
-                    if intent_coro:
-                        (response, affection_result), detected_intent = await asyncio.gather(gen_coro, intent_coro)
-                        if detected_intent:
-                            alarm_intent = detected_intent
-                    else:
-                        response, affection_result = await gen_coro
-                    self.active_conversations[key] = now + CONVERSATION_TIMEOUT_SECONDS
-                    safe_response = sanitize_mentions(response[:1980])
-                    await message.reply(
-                        safe_response,
-                        mention_author=False,
-                        allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, replied_user=False),
-                    )
-                    # 호감도 "레벨"이 올랐거나 내렸을 때만 축하/알림 카드 전송 (매 대화마다 카드 2개씩 보내는 도배 방지)
-                    if affection_result and affection_result.get("level_changed"):
-                        try:
-                            await message.reply(view=build_affection_card(affection_result), mention_author=False)
-                        except discord.DiscordException:
-                            log.exception("Failed to send affection status card")
+                gen_coro = generate_response(message.author.id, message.guild.id if message.guild else None, prompt, image_urls)
+                if intent_coro:
+                    (response, affection_result), detected_intent = await asyncio.gather(gen_coro, intent_coro)
+                    if detected_intent:
+                        alarm_intent = detected_intent
+                else:
+                    response, affection_result = await gen_coro
+                self.active_conversations[key] = now + CONVERSATION_TIMEOUT_SECONDS
+                safe_response = sanitize_mentions(response[:1980])
+                await message.reply(
+                    safe_response,
+                    mention_author=False,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, replied_user=False),
+                )
+                # 호감도 "레벨"이 올랐거나 내렸을 때만 축하/알림 카드 전송 (매 대화마다 카드 2개씩 보내는 도배 방지)
+                if affection_result and affection_result.get("level_changed"):
+                    try:
+                        await message.reply(view=build_affection_card(affection_result), mention_author=False)
+                    except discord.DiscordException:
+                        log.exception("Failed to send affection status card")
                 # 자연어로 요청한 알람 설정/취소/목록
                 if alarm_intent and alarm_intent.get("type") == "cancel":
                     count = db.cancel_user_alarms(message.author.id, message.channel.id)
@@ -321,13 +320,13 @@ class Events(commands.Cog):
                         allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
                     )
                 await self._send_chat_log(message, user_question, response)
-            except AIServiceError as error:
-                if is_mentioned or is_reply or triggered or message.guild is None:
-                    await message.reply(str(error), mention_author=False)
-            except Exception:
-                log.exception("Message conversation error")
-                if is_mentioned or is_reply or triggered or message.guild is None:
-                    await message.reply("응답을 생성하는 중 오류가 발생했습니다.", mention_author=False)
+        except AIServiceError as error:
+            if is_mentioned or is_reply or triggered or message.guild is None:
+                await message.reply(str(error), mention_author=False)
+        except Exception:
+            log.exception("Message conversation error")
+            if is_mentioned or is_reply or triggered or message.guild is None:
+                await message.reply("응답을 생성하는 중 오류가 발생했습니다.", mention_author=False)
         finally:
             self.processing_users.discard(message.author.id)
 
