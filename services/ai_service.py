@@ -7,6 +7,8 @@ import random
 from config import (
     AUTO_WEB_SEARCH,
     AI_PROVIDER,
+    GEMINI_API_URL,
+    GEMINI_MODELS,
     GROQ_API_URL,
     GROQ_MODELS,
     HUGGINGFACE_API_URL,
@@ -42,10 +44,11 @@ import time
 log = logging.getLogger(__name__)
 
 # 전역 프로바이더 교대(Round-Robin) 및 쿨다운 관리
-_PROVIDER_POOL = ["upstage", "openai", "nvidia", "groq", "huggingface", "openrouter", "ollama"]
+_PROVIDER_POOL = ["gemini", "upstage", "openai", "nvidia", "groq", "huggingface", "openrouter", "ollama"]
 # 프로바이더별 필수 API 키 환경변수 (키가 없으면 아예 시도하지 않음)
 # ollama는 인증키가 필요 없으므로 OLLAMA_HOST(서버 주소) 설정 유무로 후보 선정을 판단한다.
 _PROVIDER_ENV = {
+    "gemini": "GEMINI_API_KEY",
     "upstage": "UPSTAGE_API_KEY",
     "openai": "OPENAI_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
@@ -56,6 +59,7 @@ _PROVIDER_ENV = {
 }
 # 프로바이더별 사용 가능 모델 목록 (.env의 XXX_MODEL에 쉼표로 여러 개 등록 가능 → 모두 라운드로빈 사용)
 _PROVIDER_MODELS: dict[str, list[str]] = {
+    "gemini": GEMINI_MODELS,
     "upstage": UPSTAGE_MODELS,
     "openai": OPENAI_MODELS,
     "nvidia": NVIDIA_MODELS,
@@ -120,7 +124,12 @@ def _single_api_call(
     temperature: float = 0.85,
     model: str | None = None,
 ) -> str:
-    if provider == "upstage":
+    if provider == "gemini":
+        token = os.getenv("GEMINI_API_KEY")
+        api_url = GEMINI_API_URL
+        models = GEMINI_MODELS
+        token_name = "GEMINI_API_KEY"
+    elif provider == "upstage":
         token = os.getenv("UPSTAGE_API_KEY")
         api_url = UPSTAGE_API_URL
         models = UPSTAGE_MODELS

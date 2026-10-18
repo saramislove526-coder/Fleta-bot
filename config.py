@@ -36,6 +36,11 @@ HUGGINGFACE_VISION_MODEL = os.getenv("HUGGINGFACE_VISION_MODEL", "CohereLabs/aya
 HUGGINGFACE_API_URL = os.getenv("HUGGINGFACE_API_URL", "https://router.huggingface.co/v1/chat/completions")
 HUGGINGFACE_MODELS = _model_list(HUGGINGFACE_MODEL)
 
+# Google Gemini (공식 OpenAI 호환 엔드포인트 지원)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash,gemini-1.5-flash")
+GEMINI_MODELS = _model_list(GEMINI_MODEL)
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+
 # OpenRouter (무료 티어 포함 — OPENROUTER_API_KEY가 있어야 후보 프로바이더에 포함됨)
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-20b:free")
 OPENROUTER_MODELS = _model_list(OPENROUTER_MODEL)

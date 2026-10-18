@@ -18,6 +18,9 @@ __pycache__/
 Thumbs.db
 
 # Database (public repo — chat data must never be pushed; server keeps its own copy)
+*.db
+*.db-shm
+*.db-wal
 database/*.db
 database/*.db-shm
 database/*.db-wal
