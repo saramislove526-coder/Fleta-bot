@@ -27,7 +27,7 @@ from services.intents import (
 )
 from cogs.alarms import describe_alarm
 from ui.status_card import build_affection_card
-from utils.helpers import sanitize_mentions
+from utils.helpers import filter_spam_response, sanitize_mentions
 
 log = logging.getLogger(__name__)
 CUSTOM_EMOJI = re.compile(r"<a?:([^:>]+):\d+>")
@@ -278,11 +278,12 @@ class Events(commands.Cog):
                 else:
                     response, affection_result = await gen_coro
                 self.active_conversations[key] = now + CONVERSATION_TIMEOUT_SECONDS
-                safe_response = sanitize_mentions(response[:1980])
+                safe_response = filter_spam_response(response)
+                safe_response = sanitize_mentions(safe_response[:1980])
                 await message.reply(
                     safe_response,
                     mention_author=False,
-                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, replied_user=False),
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=False, replied_user=False),
                 )
                 # 호감도 "레벨"이 올랐거나 내렸을 때만 축하/알림 카드 전송 (매 대화마다 카드 2개씩 보내는 도배 방지)
                 if affection_result and affection_result.get("level_changed"):
@@ -297,7 +298,7 @@ class Events(commands.Cog):
                         cancel_msg = f"🔕 예약된 알람 **{count}개**를 취소했어요!"
                     else:
                         cancel_msg = "😴 이 채널에 예약된 알람이 없어요."
-                    await message.reply(cancel_msg, mention_author=False, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False))
+                    await message.reply(cancel_msg, mention_author=False, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=False))
                 elif alarm_intent and alarm_intent.get("type") == "list":
                     rows = db.get_user_alarms(message.author.id, message.channel.id)
                     if rows:
@@ -305,7 +306,7 @@ class Events(commands.Cog):
                         list_msg = f"⏰ 예약된 알람 **{len(rows)}개**야:\n{lines}"
                     else:
                         list_msg = "😴 이 채널에 예약된 알람이 없어요. \"10분 뒤에 알려줘\"처럼 말하면 설정해 드릴게요!"
-                    await message.reply(sanitize_mentions(list_msg[:1980]), mention_author=False, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False))
+                    await message.reply(sanitize_mentions(list_msg[:1980]), mention_author=False, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=False))
                 elif alarm_intent:
                     delay = alarm_intent["delay_minutes"]
                     raw_note = alarm_intent.get("note") or "알람"
@@ -317,7 +318,7 @@ class Events(commands.Cog):
                     await message.reply(
                         f"⏰ 알람 설정 완료! **{format_delay(delay)}** 뒤에 \"{note}\"(으)로 알려드릴게요.{repeat_tag}",
                         mention_author=False,
-                        allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
+                        allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=False),
                     )
                 await self._send_chat_log(message, user_question, response)
         except AIServiceError as error:
