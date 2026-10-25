@@ -340,11 +340,19 @@ class Events(commands.Cog):
                 await self._send_chat_log(message, user_question, response)
         except AIServiceError as error:
             if is_mentioned or is_reply or triggered or message.guild is None:
-                await message.reply(str(error), mention_author=False)
+                try:
+                    await message.reply(str(error), mention_author=False)
+                except discord.DiscordException:
+                    log.warning("Failed to send AIServiceError reply: %s", error)
+        except discord.DiscordException as err:
+            log.warning("Discord API error during message handling: %s", err)
         except Exception:
             log.exception("Message conversation error")
             if is_mentioned or is_reply or triggered or message.guild is None:
-                await message.reply("응답을 생성하는 중 오류가 발생했습니다.", mention_author=False)
+                try:
+                    await message.reply("응답을 생성하는 중 오류가 발생했습니다.", mention_author=False)
+                except discord.DiscordException:
+                    pass
         finally:
             self.processing_users.discard(message.author.id)
 
