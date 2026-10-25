@@ -100,6 +100,7 @@ COGS = (
     "cogs.events",
     "cogs.alarms",
     "cogs.help",
+    "cogs.utility",
 )
 
 async def load_cogs():
