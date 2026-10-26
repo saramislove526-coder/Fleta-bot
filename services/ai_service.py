@@ -1,7 +1,7 @@
 import asyncio
 import os
 import re
-import requests
+import httpx
 import random
 
 from config import (
@@ -198,18 +198,19 @@ def _single_api_call(
     }
 
     try:
-        response = requests.post(
+        timeout = httpx.Timeout(120.0, connect=5.0) if provider == "ollama" else httpx.Timeout(30.0)
+        response = httpx.post(
             api_url,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=payload,
             # 로컬 Ollama는 첫 토큰까지 느리고 생성도 오래 걸릴 수 있어 응답 대기는 여유를 둔다.
             # 단, 연결 자체는 빨리 포기해(5초) 폴백 지연을 막는다.
-            timeout=(5, 120) if provider == "ollama" else 30,
+            timeout=timeout,
         )
-    except requests.RequestException as err:
+    except httpx.HTTPError as err:
         raise AIServiceError(f"{provider} 서버 연결 문제: {err}") from err
 
-    if not response.ok:
+    if not response.is_success:
         if _is_rate_limit_error(response.status_code, response.text):
             raise AIRateLimitError(f"{provider} 한도/토큰 초과 ({response.status_code}): {response.text[:100]}")
         # 인증/결제 오류는 프로바이더 전체가 쓸 수 없으므로 프로바이더 전체 쿨다운

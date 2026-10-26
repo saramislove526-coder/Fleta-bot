@@ -1,7 +1,7 @@
 import os
 import re
 
-import requests
+import httpx
 
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
@@ -23,15 +23,15 @@ def search_web(query: str) -> tuple[str, list[tuple[str, str]]] | None:
     if not api_key:
         return None
     try:
-        response = requests.post(
+        response = httpx.post(
             TAVILY_SEARCH_URL,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"query": query[:400], "search_depth": "basic", "max_results": 3, "topic": "general"},
-            timeout=15,
+            timeout=15.0,
         )
         response.raise_for_status()
         results = response.json().get("results", [])[:3]
-    except (requests.RequestException, ValueError):
+    except (httpx.HTTPError, ValueError):
         return None
 
     sources = [(item.get("title", "검색 결과"), item.get("url", "")) for item in results if item.get("url")]

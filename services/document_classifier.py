@@ -12,7 +12,7 @@ import logging
 import os
 from typing import Dict, Any
 
-import requests
+import httpx
 
 log = logging.getLogger(__name__)
 
@@ -72,14 +72,14 @@ def classify_document(image_path: str, api_key: str | None = None) -> Dict[str, 
         },
     }
 
-    resp = requests.post(
+    resp = httpx.post(
         UPSTAGE_DOC_CLASSIFY_URL,
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json=payload,
-        timeout=60,
+        timeout=60.0,
     )
 
-    if not resp.ok:
+    if not resp.is_success:
         raise RuntimeError(f"Upstage 문서 분류 API 오류 ({resp.status_code}): {resp.text[:200]}")
 
     data = resp.json()
