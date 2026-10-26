@@ -16,9 +16,6 @@ load_dotenv()
 from config import COMMAND_PREFIX, DISCORD_GUILD_ID
 from utils.sync import clear_obsolete_global, sync_guild
 
-# ----------------------------------
-# Logging
-# ----------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,15 +24,9 @@ logging.basicConfig(
 
 log = logging.getLogger("Bot")
 
-# ----------------------------------
-# Intents
-# ----------------------------------
 
 intents = discord.Intents.all()
 
-# ----------------------------------
-# Bot
-# ----------------------------------
 
 bot = commands.Bot(
     command_prefix=COMMAND_PREFIX,
@@ -51,9 +42,6 @@ bot = commands.Bot(
 
 commands_synced = False
 
-# ----------------------------------
-# Events
-# ----------------------------------
 
 @bot.event
 async def on_ready():
@@ -86,9 +74,6 @@ async def on_ready():
         except Exception:
             log.exception("Failed to sync slash commands.")
 
-# ----------------------------------
-# Load Cogs
-# ----------------------------------
 
 COGS = (
     "cogs.ai",
@@ -108,9 +93,6 @@ async def load_cogs():
         except Exception as e:
             log.exception(f"Failed to load {cog}: {e}")
 
-# ----------------------------------
-# Main
-# ----------------------------------
 
 async def main():
     async with bot:
