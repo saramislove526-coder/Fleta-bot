@@ -15,7 +15,7 @@ def build_prompt(user_id: int, character, message: str) -> list[dict]:
     safe_user_message = (message or "").strip()[:MAX_USER_INPUT_CHARS]
 
     memories = get_memories(user_id, character['id'])
-    history = db.get_conversation(user_id, character['id'], min(PROMPT_HISTORY_LIMIT, 10))
+    history = db.get_conversation(user_id, character['id'], PROMPT_HISTORY_LIMIT)
     summary = db.get_summary(user_id, character['id'])
     affection = AffectionService.get(user_id, character['id'])
 
@@ -52,12 +52,12 @@ def build_prompt(user_id: int, character, message: str) -> list[dict]:
         when = dt_kst_local.strftime("%m/%d %H:%M") if dt_kst_local else ""
         time_flow_lines.append(f"- [{role}] {preview} · {when} ({rel})")
     # 시간 흐름은 최근 5개만 유지 (컨텍스트 제한)
-    time_flow_text = "\n".join(time_flow_lines[-5:]) if time_flow_lines else "아직 대화 기록이 없습니다."
+    time_flow_text = "\n".join(time_flow_lines[-10:]) if time_flow_lines else "아직 대화 기록이 없습니다."
 
     # 컨텍스트 제한: 기억은 핵심 8개, 항목당 최대 70자
-    memory_text = "\n".join(f"- {item[:70]}" for item in memories[:8]) or "- No saved details yet."
+    memory_text = "\n".join(f"- {item[:200]}" for item in memories[:25]) or "- No saved details yet."
     # 컨텍스트 제한: 누적 요약은 최대 400자
-    summary_text = (summary or "")[:400] or "- No summary yet."
+    summary_text = (summary or "")[:1500] or "- No summary yet."
 
     affection_tone = AffectionService.get_level(affection)
 
@@ -116,8 +116,8 @@ def build_prompt(user_id: int, character, message: str) -> list[dict]:
 
         # 컨텍스트 제한: 각 이전 대화 내용은 최대 250자로 제한
         content = (row['content'] or "").strip()
-        if len(content) > 250:
-            content = content[:250] + "..."
+        if len(content) > 800:
+            content = content[:800] + "..."
 
         if 'timestamp' in row.keys() and row['timestamp']:
             try:

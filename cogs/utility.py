@@ -237,6 +237,18 @@ class Utility(commands.Cog):
             status = "🔴 느림"
         await interaction.response.send_message(f"🏓 퐁! **{latency}ms** {status}")
 
+    # ── GIF / 움짤 검색 (Klipy) ──
+    @app_commands.command(name="gif", description="Klipy에서 애니메이션 GIF(움짤)을 검색하여 전송합니다.")
+    @app_commands.describe(query="검색할 키워드 (예: 고양이, dance, 축하, laugh)")
+    async def gif_command(self, interaction: discord.Interaction, query: str):
+        await interaction.response.defer()
+        from services.gif_service import search_gif
+        gif_url = await asyncio.to_thread(search_gif, query)
+        if gif_url:
+            await interaction.followup.send(gif_url)
+        else:
+            await interaction.followup.send(f"🔍 **'{query}'**에 대한 GIF를 찾을 수 없어요. 다른 키워드로 검색해 보세요!", ephemeral=True)
+
 
 async def setup(bot):
     await bot.add_cog(Utility(bot))

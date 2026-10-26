@@ -409,7 +409,7 @@ def _summarize_conversation(user_id: int, character_id: int) -> None:
 
     # 기존 누적 요약을 다시 붙여넣지 않고, LLM이 만든 통합 요약만 저장한다.
     # 중복 저장은 요약을 계속 불려 토큰 낭비와 요약 품질 저하를 유발한다.
-    db.set_summary(user_id, character_id, summary[:800])
+    db.set_summary(user_id, character_id, summary[:1500])
     db.delete_oldest_conversations(user_id, character_id, SUMMARY_KEEP_RECENT)
     log.info(
         "대화 요약 완료 (user=%s, character=%s): %d통 요약, 잔여 %d통",

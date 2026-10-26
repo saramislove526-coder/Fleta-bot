@@ -14,7 +14,7 @@ def build_prompt(user_id: int, character, message: str) -> list[dict]:
     safe_user_message = (message or "").strip()[:MAX_USER_INPUT_CHARS]
 
     memories = get_memories(user_id, character['id'])
-    history = db.get_conversation(user_id, character['id'], min(PROMPT_HISTORY_LIMIT, 10))
+    history = db.get_conversation(user_id, character['id'], PROMPT_HISTORY_LIMIT)
     summary = db.get_summary(user_id, character['id'])
     affection = AffectionService.get(user_id, character['id'])
 
@@ -50,10 +50,10 @@ def build_prompt(user_id: int, character, message: str) -> list[dict]:
         preview = " ".join((row['content'] or "").split())[:25]
         when = dt_kst_local.strftime("%m/%d %H:%M") if dt_kst_local else ""
         time_flow_lines.append(f"- [{role}] {preview} · {when} ({rel})")
-    time_flow_text = "\n".join(time_flow_lines[-5:]) if time_flow_lines else "아직 대화 기록이 없습니다."
+    time_flow_text = "\n".join(time_flow_lines[-10:]) if time_flow_lines else "아직 대화 기록이 없습니다."
 
-    memory_text = "\n".join(f"- {item[:70]}" for item in memories[:8]) or "없음"
-    summary_text = (summary or "")[:400] or "없음"
+    memory_text = "\n".join(f"- {item[:200]}" for item in memories[:25]) or "없음"
+    summary_text = (summary or "")[:1500] or "없음"
     affection_tone = AffectionService.get_level(affection)
 
     char_name = sanitize_character_field(character.get('name', '플레타'), '플레타')
@@ -110,8 +110,8 @@ Time: {current_time_str}
             role = 'user'
 
         content = (row['content'] or "").strip()
-        if len(content) > 250:
-            content = content[:250] + "..."
+        if len(content) > 800:
+            content = content[:800] + "..."
 
         if 'timestamp' in row.keys() and row['timestamp']:
             try:

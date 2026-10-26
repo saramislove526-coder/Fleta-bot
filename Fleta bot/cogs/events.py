@@ -27,6 +27,7 @@ from services.intents import (
     has_list_cue,
 )
 from cogs.alarms import describe_alarm
+from services.gif_service import extract_gif_query, search_gif
 from ui.status_card import build_affection_card
 from utils.helpers import check_prompt_safety, filter_spam_response, get_safe_refusal, sanitize_mentions
 
@@ -279,19 +280,38 @@ class Events(commands.Cog):
             alarm_intent = None
             intent_coro = None
 
+        # 자연어 GIF/움짤 요청 감지 (본 응답 생성과 병렬 실행)
+        gif_query = extract_gif_query(prompt)
+        gif_coro = asyncio.to_thread(search_gif, gif_query) if gif_query else None
+
         self.processing_users.add(message.author.id)
         self.user_cooldowns[message.author.id] = now
         try:
             async with message.channel.typing():
                 gen_coro = generate_response(message.author.id, message.guild.id if message.guild else None, prompt, image_urls)
+                coros = [gen_coro]
                 if intent_coro:
-                    (response, affection_result), detected_intent = await asyncio.gather(gen_coro, intent_coro)
+                    coros.append(intent_coro)
+                if gif_coro:
+                    coros.append(gif_coro)
+
+                results = await asyncio.gather(*coros)
+                response, affection_result = results[0]
+                idx = 1
+                if intent_coro:
+                    detected_intent = results[idx]
                     if detected_intent:
                         alarm_intent = detected_intent
-                else:
-                    response, affection_result = await gen_coro
+                    idx += 1
+                found_gif = None
+                if gif_coro:
+                    found_gif = results[idx]
+                    idx += 1
+
                 self.active_conversations[key] = now + CONVERSATION_TIMEOUT_SECONDS
                 safe_response = filter_spam_response(response)
+                if found_gif and found_gif not in safe_response:
+                    safe_response = f"{safe_response}\n{found_gif}"
                 safe_response = sanitize_mentions(safe_response[:1980])
                 await message.reply(
                     safe_response,
