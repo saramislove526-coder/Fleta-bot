@@ -139,11 +139,7 @@ class Events(commands.Cog):
             content_type = attachment.content_type or ""
             if content_type.startswith("image/") or attachment.filename.lower().endswith(IMAGE_EXTENSIONS):
                 urls.append(attachment.url)
-        for embed in message.embeds:
-            if embed.image and embed.image.url:
-                urls.append(embed.image.url)
-            if embed.thumbnail and embed.thumbnail.url:
-                urls.append(embed.thumbnail.url)
+
         urls.extend(match.group(0) for match in IMAGE_URL.finditer(message.content))
         urls.extend(str(sticker.url) for sticker in message.stickers if getattr(sticker, "url", None))
         return list(dict.fromkeys(urls))[:3]
@@ -340,11 +336,19 @@ class Events(commands.Cog):
                 await self._send_chat_log(message, user_question, response)
         except AIServiceError as error:
             if is_mentioned or is_reply or triggered or message.guild is None:
-                await message.reply(str(error), mention_author=False)
+                try:
+                    await message.reply(str(error), mention_author=False)
+                except discord.DiscordException:
+                    log.warning("Failed to send AIServiceError reply: %s", error)
+        except discord.DiscordException as err:
+            log.warning("Discord API error during message handling: %s", err)
         except Exception:
             log.exception("Message conversation error")
             if is_mentioned or is_reply or triggered or message.guild is None:
-                await message.reply("응답을 생성하는 중 오류가 발생했습니다.", mention_author=False)
+                try:
+                    await message.reply("응답을 생성하는 중 오류가 발생했습니다.", mention_author=False)
+                except discord.DiscordException:
+                    pass
         finally:
             self.processing_users.discard(message.author.id)
 

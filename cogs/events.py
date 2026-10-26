@@ -139,11 +139,7 @@ class Events(commands.Cog):
             content_type = attachment.content_type or ""
             if content_type.startswith("image/") or attachment.filename.lower().endswith(IMAGE_EXTENSIONS):
                 urls.append(attachment.url)
-        for embed in message.embeds:
-            if embed.image and embed.image.url:
-                urls.append(embed.image.url)
-            if embed.thumbnail and embed.thumbnail.url:
-                urls.append(embed.thumbnail.url)
+
         urls.extend(match.group(0) for match in IMAGE_URL.finditer(message.content))
         urls.extend(str(sticker.url) for sticker in message.stickers if getattr(sticker, "url", None))
         return list(dict.fromkeys(urls))[:3]

@@ -13,16 +13,16 @@ def _model_list(value: str) -> list[str]:
 
 
 # 한국어 1티어 추천 모델: Upstage Solar Pro (Solar LLM)
-UPSTAGE_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro4,solar-pro")
+UPSTAGE_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro,solar-mini")
 UPSTAGE_MODELS = _model_list(UPSTAGE_MODEL)
 UPSTAGE_API_URL = "https://api.upstage.ai/v1/chat/completions"
 
-# NVIDIA Llama 모델
-NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-405b-instruct")
+# NVIDIA Llama 모델 (비전 지원)
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.2-11b-vision-instruct,meta/llama-3.2-90b-vision-instruct")
 NVIDIA_MODELS = _model_list(NVIDIA_MODEL)
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b,openai/gpt-oss-20b")
 GROQ_MODELS = _model_list(GROQ_MODEL)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 

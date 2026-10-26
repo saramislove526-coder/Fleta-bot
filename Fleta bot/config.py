@@ -13,16 +13,16 @@ def _model_list(value: str) -> list[str]:
 
 
 # 한국어 1티어 추천 모델: Upstage Solar Pro (Solar LLM)
-UPSTAGE_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro4,solar-pro")
+UPSTAGE_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro,solar-mini")
 UPSTAGE_MODELS = _model_list(UPSTAGE_MODEL)
 UPSTAGE_API_URL = "https://api.upstage.ai/v1/chat/completions"
 
-# NVIDIA Llama 모델
-NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-405b-instruct")
+# NVIDIA Llama 모델 (비전 지원)
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.2-11b-vision-instruct,meta/llama-3.2-90b-vision-instruct")
 NVIDIA_MODELS = _model_list(NVIDIA_MODEL)
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b,openai/gpt-oss-20b")
 GROQ_MODELS = _model_list(GROQ_MODEL)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -54,12 +54,12 @@ OLLAMA_MODELS = _model_list(OLLAMA_MODEL)
 MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "100"))
 PROMPT_HISTORY_LIMIT = int(os.getenv("PROMPT_HISTORY_LIMIT", "10"))
 MAX_USER_INPUT_CHARS = int(os.getenv("MAX_USER_INPUT_CHARS", "500"))
-MAX_CONTEXT_TOTAL_CHARS = int(os.getenv("MAX_CONTEXT_TOTAL_CHARS", "2500"))
+MAX_CONTEXT_TOTAL_CHARS = int(os.getenv("MAX_CONTEXT_TOTAL_CHARS", "4000"))
 SUMMARY_TRIGGER_COUNT = int(os.getenv("SUMMARY_TRIGGER_COUNT", "40"))
 SUMMARY_KEEP_RECENT = int(os.getenv("SUMMARY_KEEP_RECENT", "10"))
 MAX_MEMORY_ITEMS = int(os.getenv("MAX_MEMORY_ITEMS", "30"))
 MAX_CHARACTER_NAME_LENGTH = 50
-MAX_RESPONSE_TOKENS = int(os.getenv("MAX_RESPONSE_TOKENS", "500"))
+MAX_RESPONSE_TOKENS = int(os.getenv("MAX_RESPONSE_TOKENS", "700"))
 RESPONSE_TEMPERATURE = float(os.getenv("RESPONSE_TEMPERATURE", "0.85"))
 DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "0"))
 PUBLIC_CHARACTER_CHANNEL_ID = int(os.getenv("PUBLIC_CHARACTER_CHANNEL_ID", "0"))

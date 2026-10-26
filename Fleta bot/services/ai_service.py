@@ -45,7 +45,7 @@ import time
 log = logging.getLogger(__name__)
 
 # 전역 프로바이더 교대(Round-Robin) 및 쿨다운 관리
-_PROVIDER_POOL = ["gemini", "upstage", "openai", "nvidia", "groq", "huggingface", "openrouter", "ollama"]
+_PROVIDER_POOL = ["upstage", "groq", "nvidia", "openai", "gemini", "openrouter", "huggingface", "ollama"]
 # 프로바이더별 필수 API 키 환경변수 (키가 없으면 아예 시도하지 않음)
 # ollama는 인증키가 필요 없으므로 OLLAMA_HOST(서버 주소) 설정 유무로 후보 선정을 판단한다.
 _PROVIDER_ENV = {
@@ -185,9 +185,28 @@ def _single_api_call(
     # 만약 이미지가 있다면, 마지막 사용자 메시지에 이미지를 포함시킵니다.
     if image_urls and messages and messages[-1]["role"] == "user":
         text_content = messages[-1]["content"]
-        content_list = [{"type": "text", "text": text_content}]
-        content_list.extend({"type": "image_url", "image_url": {"url": url}} for url in image_urls[:3])
-        messages[-1]["content"] = content_list
+        content_list = []
+        if isinstance(text_content, list):
+            text_content = next((item.get("text", "") for item in text_content if item.get("type") == "text"), "")
+
+        vision_supported = (
+            (provider == "nvidia" and "vision" in selected_model.lower())
+            or (provider == "huggingface" and image_urls)
+            or (provider == "openai" and any(k in selected_model.lower() for k in ("4o", "vision")))
+            or (provider == "gemini")
+        )
+        if vision_supported:
+            content_list = [{"type": "text", "text": text_content}]
+            for u in image_urls[:3]:
+                content_list.append({"type": "image_url", "image_url": {"url": u}})
+            messages[-1]["content"] = content_list
+    
+    
+        else:
+            messages[-1]["content"] = f"{text_content}\n[참조 이미지: {image_urls[0]}]"
+
+
+
 
     payload = {
         "model": HUGGINGFACE_VISION_MODEL if provider == "huggingface" and image_urls else selected_model,
