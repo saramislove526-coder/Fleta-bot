@@ -213,23 +213,21 @@ class Database:
         self.cursor.execute("SELECT COUNT(*) AS c FROM conversations WHERE user_id = ? AND character_id = ?", (user_id, character_id))
         return self.cursor.fetchone()["c"]
 
-    def get_conversations_for_summary(self, user_id, character_id, keep_recent):
-        """최근 keep_recent개를 제외한 오래된 대화 전체 (오래된 순)."""
+    def get_conversations_for_summary(self, user_id, character_id, keep_recent, limit=12):
         total = self.count_conversations(user_id, character_id)
         older_count = total - keep_recent
         if older_count <= 0:
             return []
         self.cursor.execute(
-            "SELECT role, content FROM conversations WHERE user_id = ? AND character_id = ? ORDER BY id ASC LIMIT ?",
-            (user_id, character_id, older_count),
+            "SELECT id, role, content FROM conversations WHERE user_id = ? AND character_id = ? ORDER BY id ASC LIMIT ?",
+            (user_id, character_id, min(older_count, limit)),
         )
         return self.cursor.fetchall()
 
-    def delete_oldest_conversations(self, user_id, character_id, keep_recent):
+    def delete_summarized_conversations(self, user_id, character_id, last_id):
         self.cursor.execute(
-            "DELETE FROM conversations WHERE user_id = ? AND character_id = ? AND id NOT IN "
-            "(SELECT id FROM conversations WHERE user_id = ? AND character_id = ? ORDER BY id DESC LIMIT ?)",
-            (user_id, character_id, user_id, character_id, keep_recent),
+            "DELETE FROM conversations WHERE user_id = ? AND character_id = ? AND id <= ?",
+            (user_id, character_id, last_id),
         )
         self.conn.commit()
 
