@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 import time
 
 from config import DATABASE_PATH, MAX_MEMORY_ITEMS
@@ -8,13 +9,28 @@ DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 class Database:
     def __init__(self):
-        self.conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False, timeout=10.0)
-        self.conn.row_factory = sqlite3.Row
-        self.cursor = self.conn.cursor()
-        self.cursor.execute("PRAGMA journal_mode=WAL;")
-        self.cursor.execute("PRAGMA busy_timeout=5000;")
+        self._local = threading.local()
+        self.conn.execute("PRAGMA journal_mode=WAL;")
         self.create_tables()
         self._migrate_schema()
+
+    @property
+    def conn(self):
+        connection = getattr(self._local, "connection", None)
+        if connection is None:
+            connection = sqlite3.connect(DATABASE_PATH, timeout=10.0)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout=5000;")
+            self._local.connection = connection
+        return connection
+
+    @property
+    def cursor(self):
+        cursor = getattr(self._local, "cursor", None)
+        if cursor is None:
+            cursor = self.conn.cursor()
+            self._local.cursor = cursor
+        return cursor
 
     def create_tables(self):
         self.cursor.executescript("""
@@ -213,25 +229,35 @@ class Database:
         self.cursor.execute("SELECT COUNT(*) AS c FROM conversations WHERE user_id = ? AND character_id = ?", (user_id, character_id))
         return self.cursor.fetchone()["c"]
 
-    def get_conversations_for_summary(self, user_id, character_id, keep_recent):
-        """최근 keep_recent개를 제외한 오래된 대화 전체 (오래된 순)."""
+    def get_conversations_for_summary(self, user_id, character_id, keep_recent, limit=12):
         total = self.count_conversations(user_id, character_id)
         older_count = total - keep_recent
         if older_count <= 0:
             return []
         self.cursor.execute(
-            "SELECT role, content FROM conversations WHERE user_id = ? AND character_id = ? ORDER BY id ASC LIMIT ?",
-            (user_id, character_id, older_count),
+            "SELECT id, role, content FROM conversations WHERE user_id = ? AND character_id = ? ORDER BY id ASC LIMIT ?",
+            (user_id, character_id, min(older_count, limit)),
         )
         return self.cursor.fetchall()
 
-    def delete_oldest_conversations(self, user_id, character_id, keep_recent):
+    def delete_summarized_conversations(self, user_id, character_id, last_id):
         self.cursor.execute(
-            "DELETE FROM conversations WHERE user_id = ? AND character_id = ? AND id NOT IN "
-            "(SELECT id FROM conversations WHERE user_id = ? AND character_id = ? ORDER BY id DESC LIMIT ?)",
-            (user_id, character_id, user_id, character_id, keep_recent),
+            "DELETE FROM conversations WHERE user_id = ? AND character_id = ? AND id <= ?",
+            (user_id, character_id, last_id),
         )
         self.conn.commit()
+
+    def commit_summary_batch(self, user_id, character_id, summary, last_id):
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO summaries(user_id, character_id, summary) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, character_id) DO UPDATE SET summary = excluded.summary",
+                (user_id, character_id, summary),
+            )
+            self.conn.execute(
+                "DELETE FROM conversations WHERE user_id = ? AND character_id = ? AND id <= ?",
+                (user_id, character_id, last_id),
+            )
 
     def get_summary(self, user_id, character_id):
         self.cursor.execute("SELECT summary FROM summaries WHERE user_id = ? AND character_id = ?", (user_id, character_id))

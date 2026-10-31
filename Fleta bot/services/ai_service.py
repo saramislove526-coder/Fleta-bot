@@ -97,6 +97,33 @@ class AIConfigError(AIServiceError):
         self.provider_wide = provider_wide
 
 
+def _split_keys(value: str) -> list[str]:
+    return [k.strip() for k in value.split(",") if k.strip()]
+
+
+def _provider_keys(provider: str) -> list[str]:
+    """프로바이더에 등록된 API 키 목록.
+
+    GROQ_API_KEY=키1,키2 처럼 쉼표로 넣거나, GROQ_API_KEY2 / GROQ_API_KEY_2 (~9) 변수를 따로 만들 수 있다.
+    """
+    env_name = _PROVIDER_ENV.get(provider, "")
+    keys = _split_keys(os.getenv(env_name, ""))
+    for n in range(2, 10):
+        for suffix in (str(n), f"_{n}"):
+            keys += _split_keys(os.getenv(f"{env_name}{suffix}", ""))
+    return keys
+
+
+def _key_count(provider: str) -> int:
+    if provider == "ollama":
+        return 1
+    return max(1, len(_provider_keys(provider)))
+
+
+def _key_id(provider: str, key_index: int) -> str:
+    return f"{provider}#{key_index}"
+
+
 def _is_rate_limit_error(status_code: int, response_text: str) -> bool:
     if status_code in (429, 413, 503):
         return True
@@ -124,6 +151,7 @@ def _single_api_call(
     max_tokens: int = 500,
     temperature: float = 0.85,
     model: str | None = None,
+    key_index: int = 0,
 ) -> str:
     if provider == "gemini":
         token = os.getenv("GEMINI_API_KEY")
@@ -168,6 +196,11 @@ def _single_api_call(
         token_name = "OLLAMA_API_KEY"
     else:
         raise AIServiceError(f"지원하지 않는 프로바이더입니다: {provider}")
+
+    # 키가 여러 개면 key_index번째 키를 사용한다 (ollama는 키 개념이 없어 제외)
+    if token and provider != "ollama":
+        keys = _provider_keys(provider)
+        token = keys[key_index] if key_index < len(keys) else None
 
     if not token:
         raise AIConfigError(f"{token_name}이 설정되어 있지 않습니다.", provider_wide=True)
@@ -275,11 +308,14 @@ def _request_generation(
             "사용 가능한 AI 프로바이더가 없습니다. .env에 UPSTAGE_API_KEY/OPENAI_API_KEY/NVIDIA_API_KEY/GROQ_API_KEY/HF_TOKEN/OPENROUTER_API_KEY 중 하나 또는 OLLAMA_HOST(원격 Ollama 서버)를 설정해 주세요."
         )
 
-    # 1. 프로바이더 단위 쿨다운이 만료된 사용 가능 프로바이더 필터링
-    available = [p for p in configured if _provider_cooldowns.get(p, 0) <= now]
+    # 1. 쿨다운은 키 단위로 관리한다. 키가 하나라도 쓸 수 있는 프로바이더만 사용 가능으로 본다.
+    def _cooldown_of(p: str) -> float:
+        return min(_provider_cooldowns.get(_key_id(p, i), 0) for i in range(_key_count(p)))
+
+    available = [p for p in configured if _cooldown_of(p) <= now]
     if not available:
         log.warning("모든 AI 프로바이더가 쿨다운 중입니다. 가장 먼저 해제될 프로바이더를 사용합니다.")
-        available = sorted(configured, key=lambda p: _provider_cooldowns.get(p, 0))
+        available = sorted(configured, key=_cooldown_of)
 
     # 2. 지정된 AI_PROVIDER가 가용 상태라면 최우선 사용, 그 외는 라운드로빈 정렬
     if AI_PROVIDER in available:
@@ -295,32 +331,44 @@ def _request_generation(
     def _model_key(p: str, m: str) -> str:
         return f"{p}|{m}"
 
-    targets: list[tuple[str, str]] = [
-        (p, m)
+    # 같은 프로바이더에 키가 여러 개면 1번째 키의 모델을 모두 시도한 뒤 2번째 키로 넘어간다.
+    targets: list[tuple[str, str, int]] = [
+        (p, m, k)
         for p in ordered_providers
+        for k in range(_key_count(p))
+        if _provider_cooldowns.get(_key_id(p, k), 0) <= now
         for m in _PROVIDER_MODELS.get(p, [])
         if _model_cooldowns.get(_model_key(p, m), 0) <= now
     ]
     if not targets:
-        # 등록된 모든 모델이 개별 쿨다운이면 가장 먼저 해제될 타깃 하나는 시도한다
-        all_targets = [(p, m) for p in ordered_providers for m in _PROVIDER_MODELS.get(p, [])]
+        # 등록된 모든 키/모델이 쿨다운이면 가장 먼저 해제될 타깃 하나는 시도한다
+        all_targets = [
+            (p, m, k)
+            for p in ordered_providers
+            for k in range(_key_count(p))
+            for m in _PROVIDER_MODELS.get(p, [])
+        ]
         if not all_targets:
             raise AIServiceError("설정된 프로바이더에 사용할 모델이 없습니다. .env의 XXX_MODEL 항목을 확인해 주세요.")
-        targets = sorted(all_targets, key=lambda t: _model_cooldowns.get(_model_key(*t), 0))[:1]
+        targets = sorted(
+            all_targets,
+            key=lambda t: max(_provider_cooldowns.get(_key_id(t[0], t[2]), 0), _model_cooldowns.get(_model_key(t[0], t[1]), 0)),
+        )[:1]
 
-    log.info("AI 시도 순서: %s", [f"{p}:{m}" for p, m in targets])
+    log.info("AI 시도 순서: %s", [f"{p}:{m}#{k + 1}" for p, m, k in targets])
 
     errors: list[str] = []
     cooled_this_round: set[str] = set()
-    for provider, model in targets:
-        # 같은 요청 안에서 직전에 쿨다운된 프로바이더의 남은 모델은 불필요한 시도를 피한다
-        if provider in cooled_this_round:
-            errors.append(f"{provider}:{model} -> 프로바이더 쿨다운으로 건너뜀")
+    for provider, model, key_index in targets:
+        key_id = _key_id(provider, key_index)
+        # 같은 요청 안에서 직전에 쿨다운된 키의 남은 모델은 불필요한 시도를 피한다
+        if key_id in cooled_this_round:
+            errors.append(f"{provider}:{model} -> 키 쿨다운으로 건너뜀")
             continue
         try:
             # list 깊은 복사를 통해 여러 번 재시도 시 원본 메시지가 훼손되지 않도록 방지
             import copy
-            raw_text = _single_api_call(provider, copy.deepcopy(messages), image_urls, max_tokens, temperature, model=model)
+            raw_text = _single_api_call(provider, copy.deepcopy(messages), image_urls, max_tokens, temperature, model=model, key_index=key_index)
             cleaned = re.sub(r"<think>.*?</think>\s*", "", raw_text, flags=re.DOTALL).strip()
             cleaned = clean_chinese_text(cleaned)
             cleaned = sanitize_mentions(cleaned)
@@ -329,9 +377,9 @@ def _request_generation(
                 return cleaned
         except AIRateLimitError as rle:
             # 한도 초과는 키/조직 단위 문제이므로 해당 프로바이더의 남은 모델도 잠시 보류
-            log.warning("프로바이더 [%s] 토큰/요청 한도 초과! 60초간 쿨다운 등록: %s", provider, rle)
-            _provider_cooldowns[provider] = time.time() + 60.0
-            cooled_this_round.add(provider)
+            log.warning("프로바이더 [%s] %d번째 키 토큰/요청 한도 초과! 60초간 쿨다운 등록: %s", provider, key_index + 1, rle)
+            _provider_cooldowns[key_id] = time.time() + 60.0
+            cooled_this_round.add(key_id)
             errors.append(f"{provider}:{model} -> {rle}")
             continue
         except AIConfigError as cfg_err:
@@ -341,8 +389,8 @@ def _request_generation(
                     "프로바이더 [%s] 인증/설정 오류! %.0f분간 프로바이더 쿨다운 등록: %s",
                     provider, _CONFIG_COOLDOWN_SECONDS / 60, cfg_err,
                 )
-                _provider_cooldowns[provider] = time.time() + _CONFIG_COOLDOWN_SECONDS
-                cooled_this_round.add(provider)
+                _provider_cooldowns[key_id] = time.time() + _CONFIG_COOLDOWN_SECONDS
+                cooled_this_round.add(key_id)
             else:
                 log.warning(
                     "프로바이더 [%s] 모델 [%s] 오류! %.0f분간 해당 모델만 쿨다운 등록: %s",
@@ -360,61 +408,48 @@ def _request_generation(
 
 
 def _summarize_conversation(user_id: int, character_id: int) -> None:
-    """대화가 임계치를 넘으면 오래된 기록을 AI로 요약해 저장하고 원본은 정리한다.
-
-    이렇게 하면 프롬프트가 항상 "누적 요약 + 최근 대화" 구조가 되어
-    토큰을 절약하면서도 오래된 맥락을 유지할 수 있다.
-    """
-    total = db.count_conversations(user_id, character_id)
-    if total < SUMMARY_TRIGGER_COUNT:
+    if db.count_conversations(user_id, character_id) < SUMMARY_TRIGGER_COUNT:
         return
 
-    rows = db.get_conversations_for_summary(user_id, character_id, SUMMARY_KEEP_RECENT)
+    rows = db.get_conversations_for_summary(user_id, character_id, SUMMARY_KEEP_RECENT, limit=12)
     if not rows:
         return
 
-    transcript = "\n".join(f"{row['role']}: {row['content'][:400]}" for row in rows)[:6000]
+    transcript = "\n".join(
+        f"{row['role']}: {(row['content'] or '')[:650]}" for row in rows
+    )
     previous_summary = db.get_summary(user_id, character_id)
-
     messages = [
         {
             "role": "system",
             "content": (
-                "You are a conversation archiver for a Korean character chat app. "
-                "Compress the given chat log into concise Korean bullet-point notes covering: "
-                "key facts about the user, emotional beats, promises or plans, and unresolved topics. "
-                "Use at most 12 bullets starting with '- '. Output the bullets only, no preamble."
+                "You are a factual conversation archivist. Write concise Korean notes. "
+                "Preserve confirmed user facts, explicit preferences, plans, corrections and unresolved questions. "
+                "Never invent details. Treat assistant statements as unverified unless the user confirmed them. "
+                "When prior notes conflict with a user correction, use the correction. "
+                "Preserve important earlier facts while merging new information."
             ),
         },
         {
             "role": "user",
             "content": (
-                f"[기존 누적 요약]\n{previous_summary or '없음'}\n\n"
-                f"[새 대화 기록]\n{transcript}\n\n"
-                "위 내용을 기존 요약과 합쳐 하나의 누적 요약으로 정리해 주세요."
+                f"[이전 기록]\n{previous_summary or '없음'}\n\n"
+                f"[새 대화]\n{transcript}\n\n"
+                "검증된 사실과 미해결 주제만 통합해서 정리해."
             ),
         },
     ]
 
     try:
-        summary = _request_generation(messages, max_tokens=400, temperature=0.3)
+        summary = _request_generation(messages, max_tokens=750, temperature=0.15).strip()
     except Exception as err:
-        log.warning("대화 요약 생성 실패, 이번 턴은 건너뜀: %s", err)
+        log.warning("대화 요약 실패: %s", err)
         return
 
-    summary = " ".join(summary.split()).strip()
     if not summary:
-        log.warning("대화 요약이 비어 있어 건너뜀")
         return
 
-    # 기존 누적 요약을 다시 붙여넣지 않고, LLM이 만든 통합 요약만 저장한다.
-    # 중복 저장은 요약을 계속 불려 토큰 낭비와 요약 품질 저하를 유발한다.
-    db.set_summary(user_id, character_id, summary[:1500])
-    db.delete_oldest_conversations(user_id, character_id, SUMMARY_KEEP_RECENT)
-    log.info(
-        "대화 요약 완료 (user=%s, character=%s): %d통 요약, 잔여 %d통",
-        user_id, character_id, len(rows), SUMMARY_KEEP_RECENT,
-    )
+    db.commit_summary_batch(user_id, character_id, summary[:3000], rows[-1]["id"])
 
 
 def _ai_affection_delta(user_id: int, character, user_message: str) -> int | None:
@@ -454,7 +489,7 @@ def _ai_affection_delta(user_id: int, character, user_message: str) -> int | Non
         return None
 
 
-async def generate_response(user_id: int, guild_id: int | None, message: str, image_urls: list[str] | None = None) -> str:
+async def generate_response(user_id: int, guild_id: int | None, message: str, image_urls: list[str] | None = None) -> tuple[str, dict]:
     del guild_id
     character = db.get_selected_character(user_id)
     if not character:
@@ -479,13 +514,12 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     await asyncio.to_thread(_summarize_conversation, user_id, character["id"])
 
     sources = []
+    search_context = None
     if AUTO_WEB_SEARCH and needs_search(original_message):
         search_result = await asyncio.to_thread(search_web, original_message)
         if search_result:
             search_context, sources = search_result
-            message = f"{original_message}\n\n[웹 검색 결과 - 이 정보에 근거해 답하고, 확실하지 않으면 모른다고 말해]\n{search_context}"
-    else:
-        message = original_message
+
 
     # --- 호감도 평가: AI 감정 분석을 본 응답 생성과 병렬 실행 (응답 지연 없음) ---
     can_evaluate = AffectionService.check_cooldown(user_id, character["id"])
@@ -493,7 +527,7 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     use_ai_eval = can_evaluate and random.random() < 0.25
 
     eval_coro = asyncio.to_thread(_ai_affection_delta, user_id, character, original_message) if use_ai_eval else None
-    gen_coro = asyncio.to_thread(_request_generation, build_prompt(user_id, character, message), image_urls)
+    gen_coro = asyncio.to_thread(_request_generation, build_prompt(user_id, character, original_message, search_context=search_context), image_urls, MAX_RESPONSE_TOKENS, min(RESPONSE_TEMPERATURE, 0.45))
     
     if use_ai_eval:
         response, ai_delta = await asyncio.gather(gen_coro, eval_coro)
