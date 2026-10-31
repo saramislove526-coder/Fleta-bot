@@ -449,8 +449,7 @@ def _summarize_conversation(user_id: int, character_id: int) -> None:
     if not summary:
         return
 
-    db.set_summary(user_id, character_id, summary[:3000])
-    db.delete_summarized_conversations(user_id, character_id, rows[-1]["id"])
+    db.commit_summary_batch(user_id, character_id, summary[:3000], rows[-1]["id"])
 
 
 def _ai_affection_delta(user_id: int, character, user_message: str) -> int | None:
@@ -490,7 +489,7 @@ def _ai_affection_delta(user_id: int, character, user_message: str) -> int | Non
         return None
 
 
-async def generate_response(user_id: int, guild_id: int | None, message: str, image_urls: list[str] | None = None) -> str:
+async def generate_response(user_id: int, guild_id: int | None, message: str, image_urls: list[str] | None = None) -> tuple[str, dict]:
     del guild_id
     character = db.get_selected_character(user_id)
     if not character:
@@ -515,13 +514,12 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     await asyncio.to_thread(_summarize_conversation, user_id, character["id"])
 
     sources = []
+    search_context = None
     if AUTO_WEB_SEARCH and needs_search(original_message):
         search_result = await asyncio.to_thread(search_web, original_message)
         if search_result:
             search_context, sources = search_result
-            message = f"{original_message}\n\n[웹 검색 결과 - 이 정보에 근거해 답하고, 확실하지 않으면 모른다고 말해]\n{search_context}"
-    else:
-        message = original_message
+
 
     # --- 호감도 평가: AI 감정 분석을 본 응답 생성과 병렬 실행 (응답 지연 없음) ---
     can_evaluate = AffectionService.check_cooldown(user_id, character["id"])
@@ -529,7 +527,7 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     use_ai_eval = can_evaluate and random.random() < 0.25
 
     eval_coro = asyncio.to_thread(_ai_affection_delta, user_id, character, original_message) if use_ai_eval else None
-    gen_coro = asyncio.to_thread(_request_generation, build_prompt(user_id, character, message), image_urls)
+    gen_coro = asyncio.to_thread(_request_generation, build_prompt(user_id, character, original_message, search_context=search_context), image_urls, MAX_RESPONSE_TOKENS, min(RESPONSE_TEMPERATURE, 0.45))
     
     if use_ai_eval:
         response, ai_delta = await asyncio.gather(gen_coro, eval_coro)
