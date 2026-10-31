@@ -408,61 +408,49 @@ def _request_generation(
 
 
 def _summarize_conversation(user_id: int, character_id: int) -> None:
-    """대화가 임계치를 넘으면 오래된 기록을 AI로 요약해 저장하고 원본은 정리한다.
-
-    이렇게 하면 프롬프트가 항상 "누적 요약 + 최근 대화" 구조가 되어
-    토큰을 절약하면서도 오래된 맥락을 유지할 수 있다.
-    """
-    total = db.count_conversations(user_id, character_id)
-    if total < SUMMARY_TRIGGER_COUNT:
+    if db.count_conversations(user_id, character_id) < SUMMARY_TRIGGER_COUNT:
         return
 
-    rows = db.get_conversations_for_summary(user_id, character_id, SUMMARY_KEEP_RECENT)
+    rows = db.get_conversations_for_summary(user_id, character_id, SUMMARY_KEEP_RECENT, limit=12)
     if not rows:
         return
 
-    transcript = "\n".join(f"{row['role']}: {row['content'][:400]}" for row in rows)[:6000]
+    transcript = "\n".join(
+        f"{row['role']}: {(row['content'] or '')[:650]}" for row in rows
+    )
     previous_summary = db.get_summary(user_id, character_id)
-
     messages = [
         {
             "role": "system",
             "content": (
-                "You are a conversation archiver for a Korean character chat app. "
-                "Compress the given chat log into concise Korean bullet-point notes covering: "
-                "key facts about the user, emotional beats, promises or plans, and unresolved topics. "
-                "Use at most 12 bullets starting with '- '. Output the bullets only, no preamble."
+                "You are a factual conversation archivist. Write concise Korean notes. "
+                "Preserve confirmed user facts, explicit preferences, plans, corrections and unresolved questions. "
+                "Never invent details. Treat assistant statements as unverified unless the user confirmed them. "
+                "When prior notes conflict with a user correction, use the correction. "
+                "Preserve important earlier facts while merging new information."
             ),
         },
         {
             "role": "user",
             "content": (
-                f"[기존 누적 요약]\n{previous_summary or '없음'}\n\n"
-                f"[새 대화 기록]\n{transcript}\n\n"
-                "위 내용을 기존 요약과 합쳐 하나의 누적 요약으로 정리해 주세요."
+                f"[이전 기록]\n{previous_summary or '없음'}\n\n"
+                f"[새 대화]\n{transcript}\n\n"
+                "검증된 사실과 미해결 주제만 통합해서 정리해."
             ),
         },
     ]
 
     try:
-        summary = _request_generation(messages, max_tokens=400, temperature=0.3)
+        summary = _request_generation(messages, max_tokens=750, temperature=0.15).strip()
     except Exception as err:
-        log.warning("대화 요약 생성 실패, 이번 턴은 건너뜀: %s", err)
+        log.warning("대화 요약 실패: %s", err)
         return
 
-    summary = " ".join(summary.split()).strip()
     if not summary:
-        log.warning("대화 요약이 비어 있어 건너뜀")
         return
 
-    # 기존 누적 요약을 다시 붙여넣지 않고, LLM이 만든 통합 요약만 저장한다.
-    # 중복 저장은 요약을 계속 불려 토큰 낭비와 요약 품질 저하를 유발한다.
-    db.set_summary(user_id, character_id, summary[:1500])
-    db.delete_oldest_conversations(user_id, character_id, SUMMARY_KEEP_RECENT)
-    log.info(
-        "대화 요약 완료 (user=%s, character=%s): %d통 요약, 잔여 %d통",
-        user_id, character_id, len(rows), SUMMARY_KEEP_RECENT,
-    )
+    db.set_summary(user_id, character_id, summary[:3000])
+    db.delete_summarized_conversations(user_id, character_id, rows[-1]["id"])
 
 
 def _ai_affection_delta(user_id: int, character, user_message: str) -> int | None:
