@@ -3,6 +3,7 @@ from database.database import db
 from services.affection import AffectionService
 from services.memory import get_memories
 
+import os
 from datetime import datetime, timezone, timedelta
 from utils.helpers import sanitize_character_field
 
@@ -14,7 +15,7 @@ def build_prompt(user_id: int, character, message: str) -> list[dict]:
     safe_user_message = (message or "").strip()[:MAX_USER_INPUT_CHARS]
 
     memories = get_memories(user_id, character['id'])
-    history = db.get_conversation(user_id, character['id'], PROMPT_HISTORY_LIMIT)
+    history = db.get_conversation(user_id, character['id'], max(PROMPT_HISTORY_LIMIT, 50))
     summary = db.get_summary(user_id, character['id'])
     affection = AffectionService.get(user_id, character['id'])
 
@@ -116,8 +117,8 @@ Time: {current_time_str}
             role = 'user'
 
         content = (row['content'] or "").strip()
-        if len(content) > 800:
-            content = content[:800] + "..."
+        if len(content) > 1200:
+            content = content[:1200] + "..."
 
         if 'timestamp' in row.keys() and row['timestamp']:
             try:
@@ -134,9 +135,18 @@ Time: {current_time_str}
 
     messages.append({"role": "user", "content": f"[{datetime.now(kst).strftime('%m/%d %H:%M')}] {safe_user_message}"})
 
-    total_chars = sum(len(m.get("content", "")) for m in messages)
-    while len(messages) > 2 and total_chars > MAX_CONTEXT_TOTAL_CHARS:
-        removed = messages.pop(1)
-        total_chars -= len(removed.get("content", ""))
+    context_limit = max(6000, int(os.getenv("MAX_CONTEXT_TOTAL_CHARS", "20000")))
+    system_size = len(messages[0]["content"])
+    current_size = len(messages[-1]["content"])
+    available = max(0, context_limit - system_size - current_size)
+    history_messages = messages[1:-1]
+    selected = []
+    for item in reversed(history_messages):
+        size = len(item["content"])
+        if size > available:
+            break
+        selected.append(item)
+        available -= size
+    messages = [messages[0], *reversed(selected), messages[-1]]
 
     return messages
