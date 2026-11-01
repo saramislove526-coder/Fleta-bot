@@ -32,6 +32,7 @@ from config import (
 )
 from database.database import db
 from services.affection import AffectionService
+from services.grounding import extract_claims, find_unsupported_claims
 from services.memory import remember_message, save_memory
 from services.prompt_builder import build_prompt
 from services.summarizer import extract_memory
@@ -44,10 +45,17 @@ import time
 
 log = logging.getLogger(__name__)
 
-# 전역 프로바이더 교대(Round-Robin) 및 쿨다운 관리
+# ──────────────────────────────────────────────
+# AI 호출 담당 파일입니다.
+# 여러 AI 프로바이더를 돌아가며 쓰고, 한 곳이 막히면 다음 곳으로 넘어갑니다.
+# 답변 흐름은 맨 아래 generate_response()에 순서대로 적혀 있습니다.
+# ──────────────────────────────────────────────
+
+# 사용할 프로바이더 목록입니다. 새 프로바이더를 붙이려면 여기랑 아래 _PROVIDER_ENV, _PROVIDER_MODELS,
+# _single_api_call()의 분기에 같이 추가하면 됩니다.
 _PROVIDER_POOL = ["upstage", "groq", "nvidia", "openai", "gemini", "openrouter", "huggingface", "ollama"]
-# 프로바이더별 필수 API 키 환경변수 (키가 없으면 아예 시도하지 않음)
-# ollama는 인증키가 필요 없으므로 OLLAMA_HOST(서버 주소) 설정 유무로 후보 선정을 판단한다.
+# 프로바이더별 API 키 환경 변수 이름입니다. 이 이름으로 서버에 키를 넣으면 되고, 키가 없으면 아예 시도하지 않습니다.
+# ollama는 키가 필요 없어서 OLLAMA_HOST(서버 주소)가 있는지로 판단합니다.
 _PROVIDER_ENV = {
     "gemini": "GEMINI_API_KEY",
     "upstage": "UPSTAGE_API_KEY",
@@ -77,6 +85,11 @@ _model_cooldowns: dict[str, float] = {}
 
 # 모델 삭제·크레딧 소진 등 재시도해도 스스로 해결되지 않는 오류의 쿨다운(초)
 _CONFIG_COOLDOWN_SECONDS = 600.0
+
+# 사실 질문은 창의성보다 정확성이 중요해서 온도를 낮춥니다. (잡담은 기존 값 그대로입니다.)
+_CHAT_TEMPERATURE_CAP = 0.45
+_FACT_TEMPERATURE = 0.2
+_NO_EVIDENCE_NOTE = "※ 실시간 자료를 확인하지 못하고 답한 거라 날짜·수치는 틀릴 수 있어요."
 
 
 class AIServiceError(RuntimeError):
@@ -248,6 +261,10 @@ def _single_api_call(
         "temperature": temperature, # 성격 연기에 적합하도록 기본 0.85
         "top_p": 0.95
     }
+    if provider == "gemini":
+        # Gemini 2.5 이상은 답하기 전에 '생각'하는 데 토큰을 먼저 써서, 그대로 두면 답이 중간에 잘립니다.
+        # 캐릭터 대화엔 생각 단계가 필요 없어서 꺼 둡니다. 이러면 속도도 더 빠릅니다.
+        payload["reasoning_effort"] = "none"
 
     try:
         timeout = httpx.Timeout(120.0, connect=5.0) if provider == "ollama" else httpx.Timeout(30.0)
@@ -259,6 +276,9 @@ def _single_api_call(
             # 단, 연결 자체는 빨리 포기해(5초) 폴백 지연을 막는다.
             timeout=timeout,
         )
+    except httpx.TimeoutException as err:
+        # 응답이 너무 느린 모델은 그 모델만 잠시 빼서, 다음 요청들이 매번 30초씩 기다리지 않게 합니다.
+        raise AIConfigError(f"{provider} 응답 시간 초과 ({selected_model})") from err
     except httpx.HTTPError as err:
         raise AIServiceError(f"{provider} 서버 연결 문제: {err}") from err
 
@@ -274,7 +294,10 @@ def _single_api_call(
         # 모델 삭제/존재 안 함/만료 → 해당 모델만 장기 쿨다운하고 같은 프로바이더의 나머지 모델은 계속 사용
         if any(
             kw in response.text
-            for kw in ("model_not_found", "does not exist", "has reached its end of life", "model not found")
+            for kw in (
+                "model_not_found", "does not exist", "has reached its end of life", "model not found",
+                "no longer available", "has been deprecated", "is deprecated",
+            )
         ):
             raise AIConfigError(f"{provider} 모델 오류 ({response.status_code}): {response.text[:160]}")
         raise AIServiceError(f"{provider} API 오류 ({response.status_code}): {response.text[:160]}")
@@ -452,6 +475,52 @@ def _summarize_conversation(user_id: int, character_id: int) -> None:
     db.commit_summary_batch(user_id, character_id, summary[:3000], rows[-1]["id"])
 
 
+def _revise_with_evidence(draft: str, evidence: str, question: str, unsupported: list[str]) -> str:
+    """근거 없는 숫자가 섞인 초안을 검색 자료에 맞게 한 번만 고쳐 씁니다. 말투와 캐릭터는 그대로 둡니다."""
+    messages = [
+        {"role": "system", "content": (
+            "You are a careful fact-check editor for a Korean character chat. "
+            "Rewrite the draft reply so that every date, name and number is supported by the evidence. "
+            "Delete each listed unsupported claim completely. Never repeat an unsupported number or date, "
+            "not even to deny it. If the user asked about that part and the evidence has the correct value, "
+            "use the evidence value; otherwise say briefly that the sources do not confirm that part. "
+            "Keep the same language, speech level (반말/존댓말), persona and any [n] citations. "
+            "Do not add new facts. Output only the rewritten reply."
+        )},
+        {"role": "user", "content": (
+            f"[검색 자료]\n{evidence[:3600]}\n\n"
+            f"[사용자 질문]\n{question[:500]}\n\n"
+            f"[초안]\n{draft}\n\n"
+            f"[자료에서 확인되지 않은 표현]\n{', '.join(unsupported)}"
+        )},
+    ]
+    return _request_generation(messages, max_tokens=MAX_RESPONSE_TOKENS, temperature=0.0)
+
+
+def _verify_answer(answer: str, evidence: str | None, question: str, factual: bool) -> tuple[str, str]:
+    """생성된 답변을 검증해서 (최종 답변, 사용자에게 덧붙일 안내)를 돌려줍니다.
+
+    검색 자료가 있으면 답변 속 연도·날짜·수치를 자료와 대조하고, 근거 없는 게 있을 때만
+    한 번 고쳐 씁니다. 대부분의 답변은 추가 호출 없이 그대로 통과해서 속도가 유지됩니다.
+    """
+    if evidence:
+        unsupported = find_unsupported_claims(answer, f"{evidence}\n{question}")
+        if not unsupported:
+            return answer, ""
+        log.info("근거 없는 수치 발견, 답변 보정: %s", unsupported)
+        try:
+            revised = _revise_with_evidence(answer, evidence, question, unsupported)
+        except Exception as err:
+            log.warning("답변 보정 실패, 초안에 안내를 붙임: %s", err)
+            return answer, f"※ 다음 내용은 검색 자료에서 확인되지 않았어요: {', '.join(unsupported[:5])}"
+        still = find_unsupported_claims(revised, f"{evidence}\n{question}")
+        note = f"※ 다음 내용은 검색 자료에서 확인되지 않았어요: {', '.join(still[:5])}" if still else ""
+        return revised, note
+    if factual and extract_claims(answer):
+        return answer, _NO_EVIDENCE_NOTE
+    return answer, ""
+
+
 def _ai_affection_delta(user_id: int, character, user_message: str) -> int | None:
     """
     AI 감정 평가: 유저의 최신 메시지가 캐릭터의 호감도에 주는 영향을 -5 ~ +5 정수로 판정한다.
@@ -490,12 +559,14 @@ def _ai_affection_delta(user_id: int, character, user_message: str) -> int | Non
 
 
 def _format_response_with_sources(response: str, sources: list[tuple[str, str]], limit: int = 1900) -> str:
+    """답변 아래에 출처 링크를 붙입니다. 디스코드 글자 수(1900자)를 넘으면 답변 쪽을 줄여서 링크는 살립니다."""
     lines = []
-    for title, url in sources:
+    # 번호는 검색 자료의 [1], [2]와 똑같이 맞춥니다. 그래야 답변 속 [1]을 보고 어느 링크인지 바로 압니다.
+    for index, (title, url) in enumerate(sources, start=1):
         if len(url) > 280:
             continue
         label = " ".join(title.split())[:45]
-        candidate = f"- [{label}]({url})"
+        candidate = f"[{index}] [{label}]({url})"
         if sum(len(line) + 1 for line in lines) + len(candidate) > 520:
             break
         lines.append(candidate)
@@ -532,6 +603,8 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     # 장기 대화는 자동 요약하여 컨텍스트 창을 유지 (임계치 미만이면 즉시 반환)
     await asyncio.to_thread(_summarize_conversation, user_id, character["id"])
 
+    # ── 정확도 처리 1단계: 사실 질문인지 보고, 필요하면 검색해서 근거를 가져옵니다. ──
+    # 누구/언제/몇 년/원리 같은 사실 질문이나 "검색/최신/뉴스" 같은 말이 있으면 검색합니다. (web_search.py 참고)
     sources = []
     search_context = None
     search_attempted = bool(AUTO_WEB_SEARCH and needs_search(original_message))
@@ -540,6 +613,8 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
         if search_result:
             search_context, sources = search_result
 
+    # ── 2단계: 사실 질문은 온도를 낮춰서 AI가 말을 지어낼 여지를 줄입니다. 잡담은 원래 온도 그대로입니다. ──
+    temperature = _FACT_TEMPERATURE if search_attempted else min(RESPONSE_TEMPERATURE, _CHAT_TEMPERATURE_CAP)
 
     # --- 호감도 평가: AI 감정 분석을 본 응답 생성과 병렬 실행 (응답 지연 없음) ---
     can_evaluate = AffectionService.check_cooldown(user_id, character["id"])
@@ -547,13 +622,23 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     use_ai_eval = can_evaluate and random.random() < 0.25
 
     eval_coro = asyncio.to_thread(_ai_affection_delta, user_id, character, original_message) if use_ai_eval else None
-    gen_coro = asyncio.to_thread(_request_generation, build_prompt(user_id, character, original_message, search_context=search_context, search_attempted=search_attempted), image_urls, MAX_RESPONSE_TOKENS, min(RESPONSE_TEMPERATURE, 0.45))
-    
+    prompt_messages = build_prompt(
+        user_id, character, original_message, search_context=search_context, search_attempted=search_attempted,
+    )
+    gen_coro = asyncio.to_thread(_request_generation, prompt_messages, image_urls, MAX_RESPONSE_TOKENS, temperature)
+
     if use_ai_eval:
         response, ai_delta = await asyncio.gather(gen_coro, eval_coro)
     else:
         response = await gen_coro
         ai_delta = None
+
+    # ── 3단계: 답변 속 숫자를 검색 자료와 대조해서, 근거 없는 게 있으면 한 번 고쳐 씁니다. ──
+    # 안내 문구(accuracy_note)는 디스코드에만 보여 주고 대화 기록엔 저장하지 않습니다.
+    # 기록에 남기면 AI가 다음 답변에서 그 문구를 따라 쓰기 때문입니다.
+    response, accuracy_note = await asyncio.to_thread(
+        _verify_answer, response, search_context, original_message, search_attempted,
+    )
 
     if can_evaluate:
         if ai_delta is not None:
@@ -569,7 +654,8 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
         delta, reasons = 0, ["도배 방지 쿨다운"]
     affection_result = AffectionService.apply_delta(user_id, character["id"], delta, reasons)
 
-    full_response = _format_response_with_sources(response, sources)
+    shown = f"{response}\n\n{accuracy_note}" if accuracy_note else response
+    full_response = _format_response_with_sources(shown, sources)
     db.add_conversation(user_id, character["id"], "user", original_message)
     # 레벨 알림/검색 링크가 히스토리에 저장되면 AI가 자기 말로 착각하므로 순수 응답만 저장
     db.add_conversation(user_id, character["id"], "assistant", response)
