@@ -205,6 +205,12 @@ class Database:
         row = self.cursor.fetchone()
         return self.get_character(row["selected_character"]) if row and row["selected_character"] else None
 
+    def get_chat_trigger_enabled(self, guild_id: int) -> bool:
+        return self.get_setting(f"chat_trigger_enabled:{guild_id}", "true") == "true"
+
+    def set_chat_trigger_enabled(self, guild_id: int, enabled: bool) -> None:
+        self.set_setting(f"chat_trigger_enabled:{guild_id}", "true" if enabled else "false")
+
     def get_setting(self, key, default=None):
         self.cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
         row = self.cursor.fetchone()

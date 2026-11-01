@@ -11,13 +11,13 @@ class Help(commands.Cog):
     async def help_command(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="✨ 플레타 봇 도움말",
-            description="자연스럽고 똑똑한 AI 캐릭터 챗봇, 플레타입니다!\n멘션이나 `플레타`로 시작하는 말로 대화를 시작해보세요.",
+            description="자연스럽고 똑똑한 AI 캐릭터 챗봇, 플레타입니다!\n멘션이나 `플레타`로 시작하는 말로 대화를 시작해보세요. 이름 호출은 서버 설정에 따라 꺼질 수 있습니다.",
             color=discord.Color.pink()
         )
         embed.add_field(
             name="🗣️ 기본 대화",
             value=(
-                "- 봇을 멘션(`@플레타`)하거나 `플레타`로 시작하면 대답합니다.\n"
+                "- 봇을 멘션(`@플레타`)하거나, 이름 호출이 ON일 때 `플레타`로 시작하면 대답합니다.\n"
                 "- `10분 뒤에 알려줘`처럼 자연어로 알람을 설정할 수 있어요.\n"
                 "- `고양이 gif 보내줘`, `춤추는 움짤 줘`처럼 GIF도 요청할 수 있어요.\n"
                 "- 이미지를 첨부하면 이미지를 보고 대답합니다.\n"
@@ -60,7 +60,8 @@ class Help(commands.Cog):
                 "`/sync` - 슬래시 명령어 동기화\n"
                 "`/봇재시작` - 봇 프로세스 재시작\n"
                 "`/set_log_channel` - 공개 캐릭터 포럼 채널 설정\n"
-                "`/set_chat_log_channel` - 대화 로그 채널 설정"
+                "`/set_chat_log_channel` - 대화 로그 채널 설정\n"
+                "`/호출설정 on|off` - 이름 호출 자동 응답 설정"
             ),
             inline=False
         )

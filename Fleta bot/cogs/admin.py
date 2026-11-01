@@ -99,6 +99,43 @@ class Admin(commands.Cog):
             return
         await interaction.followup.send(f"현재 대화 로그 채널은 <#{channel_id}>입니다.", ephemeral=True)
 
+    @commands.hybrid_command(name="호출설정", description="플레타 이름 호출 자동 응답을 켜거나 끕니다.")
+    @app_commands.guild_only()
+    @app_commands.describe(state="on: 활성화, off: 비활성화 (생략하면 상태 확인)")
+    @app_commands.choices(state=[
+        app_commands.Choice(name="ON", value="on"),
+        app_commands.Choice(name="OFF", value="off"),
+    ])
+    async def chat_trigger_setting(self, ctx: commands.Context, state: str = None):
+        ephemeral = ctx.interaction is not None
+        if ctx.guild is None:
+            await ctx.send("서버에서만 사용할 수 있습니다.", ephemeral=ephemeral)
+            return
+
+        if state is None:
+            enabled = db.get_chat_trigger_enabled(ctx.guild.id)
+            await ctx.send(
+                f"🔔 현재 플레타 이름 호출 자동 응답: **{'ON' if enabled else 'OFF'}**",
+                ephemeral=ephemeral,
+            )
+            return
+
+        state = state.strip().lower()
+        if state not in ("on", "off"):
+            await ctx.send("on 또는 off를 입력해 주세요.", ephemeral=ephemeral)
+            return
+
+        if not getattr(getattr(ctx.author, "guild_permissions", None), "administrator", False):
+            await ctx.send("서버 관리자만 설정을 변경할 수 있습니다.", ephemeral=ephemeral)
+            return
+
+        db.set_chat_trigger_enabled(ctx.guild.id, state == "on")
+        await ctx.send(
+            f"✅ 플레타 이름 호출 자동 응답: **{state.upper()}**"
+            "\n봇 멘션과 답장 기능은 그대로 사용할 수 있습니다.",
+            ephemeral=ephemeral,
+        )
+
     @app_commands.command(name="봇재시작", description="플레타봇을 재시작합니다. (서버 관리자 전용)")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)

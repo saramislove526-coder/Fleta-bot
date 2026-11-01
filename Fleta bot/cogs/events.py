@@ -207,7 +207,11 @@ class Events(commands.Cog):
         is_mentioned = self.bot.user in message.mentions if self.bot.user else False
 
         # 한글 트리거 비교 시 안전하게 공백 및 소문자 처리
-        triggered = bool(CHAT_TRIGGER) and content.startswith(CHAT_TRIGGER)
+        triggered = (
+            bool(CHAT_TRIGGER)
+            and content.startswith(CHAT_TRIGGER)
+            and (message.guild is None or db.get_chat_trigger_enabled(message.guild.id))
+        )
         # 멘션/트리거로 이미 응답할 메시지가 아니라면 답글 여부(API fetch)만 확인
         is_reply = False
         if message.guild is not None and not (is_mentioned or triggered):
