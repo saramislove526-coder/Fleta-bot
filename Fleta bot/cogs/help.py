@@ -58,6 +58,7 @@ class Help(commands.Cog):
             name="⚙️ 관리자 전용",
             value=(
                 "`/sync` - 슬래시 명령어 동기화\n"
+                "`/봇재시작` - 봇 프로세스 재시작\n"
                 "`/set_log_channel` - 공개 캐릭터 포럼 채널 설정\n"
                 "`/set_chat_log_channel` - 대화 로그 채널 설정"
             ),

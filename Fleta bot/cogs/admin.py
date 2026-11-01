@@ -99,6 +99,38 @@ class Admin(commands.Cog):
             return
         await interaction.followup.send(f"현재 대화 로그 채널은 <#{channel_id}>입니다.", ephemeral=True)
 
+    @app_commands.command(name="봇재시작", description="플레타봇을 재시작합니다. (서버 관리자 전용)")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    async def restart(self, interaction: discord.Interaction):
+        if interaction.guild is None or not getattr(getattr(interaction.user, "guild_permissions", None), "administrator", False):
+            await interaction.response.send_message("서버 관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+
+        if DISCORD_GUILD_ID and interaction.guild.id != DISCORD_GUILD_ID:
+            await interaction.response.send_message("이 서버에서는 봇을 재시작할 수 없습니다.", ephemeral=True)
+            return
+
+        if getattr(self.bot, "_restart_requested", False):
+            await interaction.response.send_message("이미 재시작 중입니다.", ephemeral=True)
+            return
+
+        self.bot._restart_requested = True
+        try:
+            await interaction.response.send_message("🔄 플레타봇을 재시작합니다. 잠시 후 다시 연결됩니다.", ephemeral=True)
+        except Exception:
+            self.bot._restart_requested = False
+            raise
+        await self.bot.close()
+
+    @restart.error
+    async def restart_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message("서버 관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+        raise error
+
     @sync.error
     async def sync_error(self, interaction, error):
         if isinstance(error, app_commands.MissingPermissions):

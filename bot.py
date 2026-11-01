@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import signal
+import sys
 
 import discord
 from discord.ext import commands
@@ -113,6 +114,9 @@ async def main():
             pass
 
         await bot.start(token)
+
+    if getattr(bot, "_restart_requested", False):
+        os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
 
 if __name__ == "__main__":
     asyncio.run(main())
