@@ -489,6 +489,25 @@ def _ai_affection_delta(user_id: int, character, user_message: str) -> int | Non
         return None
 
 
+def _format_response_with_sources(response: str, sources: list[tuple[str, str]], limit: int = 1900) -> str:
+    lines = []
+    for title, url in sources:
+        if len(url) > 280:
+            continue
+        label = " ".join(title.split())[:45]
+        candidate = f"- [{label}]({url})"
+        if sum(len(line) + 1 for line in lines) + len(candidate) > 520:
+            break
+        lines.append(candidate)
+    suffix = ("\n\n🔎 참고 자료:\n" + "\n".join(lines)) if lines else ""
+    available = max(0, limit - len(suffix))
+    if len(response) > available:
+        body = response[:max(0, available - 1)] + ("…" if available else "")
+    else:
+        body = response
+    return sanitize_mentions(body + suffix)
+
+
 async def generate_response(user_id: int, guild_id: int | None, message: str, image_urls: list[str] | None = None) -> tuple[str, dict]:
     del guild_id
     character = db.get_selected_character(user_id)
@@ -515,7 +534,8 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
 
     sources = []
     search_context = None
-    if AUTO_WEB_SEARCH and needs_search(original_message):
+    search_attempted = bool(AUTO_WEB_SEARCH and needs_search(original_message))
+    if search_attempted:
         search_result = await asyncio.to_thread(search_web, original_message)
         if search_result:
             search_context, sources = search_result
@@ -527,7 +547,7 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
     use_ai_eval = can_evaluate and random.random() < 0.25
 
     eval_coro = asyncio.to_thread(_ai_affection_delta, user_id, character, original_message) if use_ai_eval else None
-    gen_coro = asyncio.to_thread(_request_generation, build_prompt(user_id, character, original_message, search_context=search_context), image_urls, MAX_RESPONSE_TOKENS, min(RESPONSE_TEMPERATURE, 0.45))
+    gen_coro = asyncio.to_thread(_request_generation, build_prompt(user_id, character, original_message, search_context=search_context, search_attempted=search_attempted), image_urls, MAX_RESPONSE_TOKENS, min(RESPONSE_TEMPERATURE, 0.45))
     
     if use_ai_eval:
         response, ai_delta = await asyncio.gather(gen_coro, eval_coro)
@@ -549,15 +569,11 @@ async def generate_response(user_id: int, guild_id: int | None, message: str, im
         delta, reasons = 0, ["도배 방지 쿨다운"]
     affection_result = AffectionService.apply_delta(user_id, character["id"], delta, reasons)
 
-    full_response = response
-    if sources:
-        links = "\n".join(f"- [{title}]({url})" for title, url in sources)
-        full_response = f"{full_response}\n\n🔎 참고한 검색 결과:\n{links}"
-    full_response = sanitize_mentions(full_response)
+    full_response = _format_response_with_sources(response, sources)
     db.add_conversation(user_id, character["id"], "user", original_message)
     # 레벨 알림/검색 링크가 히스토리에 저장되면 AI가 자기 말로 착각하므로 순수 응답만 저장
     db.add_conversation(user_id, character["id"], "assistant", response)
     # 레벨 알림은 텍스트 대신 Components V2 상황 카드(events.py)로 전송되므로 결과를 그대로 반환
     affection_result["character_name"] = character["name"]
     affection_result["avatar"] = character["avatar"]
-    return full_response[:1900], affection_result
+    return full_response, affection_result
