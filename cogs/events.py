@@ -234,7 +234,7 @@ class Events(commands.Cog):
             prompt = re.sub(rf"<@!?{self.bot.user.id}>", "", prompt).strip()
 
         # 호출 트리거 이름으로 시작한 경우 트리거 이름 떼어내기 (한글 글자 수 기준 안전 슬라이싱)
-        if CHAT_TRIGGER and prompt.startswith(CHAT_TRIGGER):
+        if triggered and CHAT_TRIGGER and prompt.startswith(CHAT_TRIGGER):
             prompt = prompt[len(CHAT_TRIGGER):].strip()
 
         # (로그용) 유저가 실제로 입력한 질문 — reply/이모지/이미지 컨텍스트가 붙기 전 시점
@@ -273,6 +273,7 @@ class Events(commands.Cog):
             self.active_conversations = {k: v for k, v in self.active_conversations.items() if v > now}
 
         # 자연어 알람 지시 감지 (본 응답 생성과 병렬 실행, 관련 키워드가 있을 때만)
+        intent_coro = None
         if has_cancel_cue(prompt):
             alarm_intent: dict | None = {"type": "cancel"}  # 키워드만으로 판정 (AI 호출 없음)
         elif has_list_cue(prompt):

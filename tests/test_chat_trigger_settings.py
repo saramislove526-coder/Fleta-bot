@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from cogs.admin import Admin
 from cogs.events import Events
@@ -112,6 +112,31 @@ class ChatTriggerMessageTests(unittest.IsolatedAsyncioTestCase):
             settings.get_selected_character.return_value = None
             await self.cog.on_message(self.message)
         self.message.reply.assert_awaited_once()
+
+    async def test_mention_does_not_strip_disabled_name(self):
+        self.message.mentions = [self.bot_user]
+        with patch("cogs.events.db") as settings, \
+             patch("cogs.events.check_prompt_safety", return_value="blocked") as safety, \
+             patch("cogs.events.get_safe_refusal", return_value="no"):
+            settings.get_chat_trigger_enabled.return_value = False
+            settings.get_selected_character.return_value = None
+            await self.cog.on_message(self.message)
+        safety.assert_called_once_with("플레타 테스트")
+
+    async def test_alarm_cancel_does_not_reference_missing_coroutine(self):
+        self.message.content = "플레타 알람 취소해줘"
+        self.message.reference = None
+        self.message.channel.typing = MagicMock(return_value=AsyncMock())
+        with patch("cogs.events.db") as settings, \
+             patch("cogs.events.generate_response", new_callable=AsyncMock, return_value=("알겠습니다", None)), \
+             patch("cogs.events.has_cancel_cue", return_value=True), \
+             patch("cogs.events.extract_gif_query", return_value=None), \
+             patch.object(self.cog, "_send_chat_log", new_callable=AsyncMock):
+            settings.get_chat_trigger_enabled.return_value = True
+            settings.cancel_user_alarms.return_value = 0
+            await self.cog.on_message(self.message)
+        self.assertEqual(self.message.reply.await_count, 2)
+        self.assertIn("알겠습니다", self.message.reply.await_args_list[0].args[0])
 
     async def test_reply_still_works_when_disabled(self):
         with patch("cogs.events.db") as settings, \
