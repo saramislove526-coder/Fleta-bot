@@ -19,3 +19,6 @@ jobs:
           cmp "services/ai_service.py" "Fleta bot/services/ai_service.py"
           cmp "services/prompt_builder.py" "Fleta bot/services/prompt_builder.py"
           cmp "database/database.py" "Fleta bot/database/database.py"
+          cmp "cogs/admin.py" "Fleta bot/cogs/admin.py"
+          cmp "cogs/events.py" "Fleta bot/cogs/events.py"
+          cmp "cogs/help.py" "Fleta bot/cogs/help.py"
