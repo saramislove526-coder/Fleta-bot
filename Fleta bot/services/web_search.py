@@ -45,12 +45,12 @@ def needs_search(text: str) -> bool:
     normalized = re.sub(r"\s+", " ", (text or "").strip()).casefold()
     if not normalized:
         return False
-    if _SMALL_TALK.match(normalized):
-        return False
-    if _PERSONAL_START.match(normalized) and not any(term in normalized for term in ("검색", "웹에서", "인터넷에서")):
-        return False
     if any(term in normalized for term in _EXPLICIT_TERMS):
         return True
+    if _SMALL_TALK.match(normalized):
+        return False
+    if _PERSONAL_START.match(normalized):
+        return False
     if any(term in normalized for term in _FACT_TERMS):
         return True
     if _PUBLIC_QUESTION.search(normalized):
@@ -88,11 +88,11 @@ def _public_url(url: str) -> str | None:
 def _source_score(url: str, api_score: object) -> float:
     host = (urlparse(url).hostname or "").lower()
     if host.endswith((".go.kr", ".ac.kr", ".gov", ".edu")) or host in ("go.kr", "ac.kr"):
-        domain_weight = 4
+        domain_weight = 0.25
     elif host.endswith((".or.kr", ".org")) or host.endswith("britannica.com"):
-        domain_weight = 2
+        domain_weight = 0.12
     elif any(tag in host for tag in ("blog.", "tistory.", "namu.wiki", "fandom.com")):
-        domain_weight = -2
+        domain_weight = -0.2
     else:
         domain_weight = 0
     relevance = float(api_score) if isinstance(api_score, (int, float)) and not isinstance(api_score, bool) else 0
